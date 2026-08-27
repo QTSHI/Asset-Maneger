@@ -349,6 +349,10 @@ async function refreshMarket() {
     for (const [currency, rate] of rateRows) if (rate) upsertRate.run(currency, rate);
 
     const assets = getActiveAssets();
+    // Manually imported valuations are point-in-time totals rather than unit
+    // prices. Keep their imported quotes stable; external integrations such as
+    // Trading212 continue to refresh through their own synchronization service.
+    const refreshableAssets = assets.filter((asset) => asset.external_source !== 'manual_import');
     const upsertQuote = db.prepare(`
       INSERT INTO quote_cache (cache_key, code, asset_type, price, currency_code, source, status, error_message, fetched_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -361,8 +365,8 @@ async function refreshMarket() {
         fetched_at = CASE WHEN excluded.price IS NOT NULL THEN CURRENT_TIMESTAMP ELSE quote_cache.fetched_at END
     `);
 
-    for (let index = 0; index < assets.length; index += 5) {
-      const batch = assets.slice(index, index + 5);
+    for (let index = 0; index < refreshableAssets.length; index += 5) {
+      const batch = refreshableAssets.slice(index, index + 5);
       const results = await Promise.all(batch.map(async (asset) => {
         const price = await getPrice({ code: asset.code, type: asset.asset_type_name });
         return { asset, price };
