@@ -27,6 +27,7 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { platformName } from "./accountHierarchy";
+import { consolidateInstruments } from "./instrumentConsolidation";
 import {
   currentMonth,
   MonthNavigator,
@@ -170,6 +171,7 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<ValuedAsset | "new" | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
+  const [selectedInstrument, setSelectedInstrument] = useState<string | null>(null);
 
   const filtered = (assets.data || []).filter((asset) =>
     `${asset.name} ${asset.code} ${asset.accountName}`
@@ -226,6 +228,13 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
     );
   }, [filtered, view, query]);
   const selected = groups.find((group) => group.key === selectedGroup);
+  const consolidatedFunds = useMemo(
+    () => consolidateInstruments(selected?.key === "fund" ? selected.assets : []),
+    [selected],
+  );
+  const selectedFund = consolidatedFunds.find(
+    (instrument) => instrument.key === selectedInstrument,
+  );
 
   const archive = useMutation({
     mutationFn: (id: number) => api.delete(`/assets/${id}`),
@@ -308,7 +317,10 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
             <button
               className={`overview-card ${selectedGroup === group.key ? "selected" : ""}`}
               key={group.key}
-              onClick={() => setSelectedGroup(group.key)}
+              onClick={() => {
+                setSelectedGroup(group.key);
+                setSelectedInstrument(null);
+              }}
             >
               <span className={`asset-dot asset-${group.key}`} />
               <span>{group.label}</span>
@@ -331,7 +343,10 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
         return (
           <button
             className={`unclassified-overview ${selectedGroup === group.key ? "selected" : ""}`}
-            onClick={() => setSelectedGroup(group.key)}
+            onClick={() => {
+              setSelectedGroup(group.key);
+              setSelectedInstrument(null);
+            }}
           >
             <AlertCircle size={18} />
             <div>
@@ -351,11 +366,56 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
               <h3>{selected.label}</h3>
               <p>{selected.assets.length} 项资产 · {money(selected.value, privateMode)}</p>
             </div>
-            <button className="secondary-button" onClick={() => setSelectedGroup(null)}>
+            <button className="secondary-button" onClick={() => {
+              setSelectedGroup(null);
+              setSelectedInstrument(null);
+            }}>
               收起明细
             </button>
           </div>
-          <div className="responsive-table">
+          {selected.key === "fund" && (
+            <div className="fund-consolidated-section">
+              <div className="subsection-head">
+                <div>
+                  <strong>同一基金合并总览</strong>
+                  <span>{consolidatedFunds.length} 只基金 · 点击后查看各平台持仓</span>
+                </div>
+              </div>
+              <div className="responsive-table fund-consolidated-table">
+                <table>
+                  <thead>
+                    <tr><th>基金</th><th>平台</th><th>合并市值</th><th>合并盈亏</th><th /></tr>
+                  </thead>
+                  <tbody>
+                    {consolidatedFunds.map((instrument) => (
+                      <tr className={selectedInstrument === instrument.key ? "selected-row" : ""} key={instrument.key}>
+                        <td data-label="基金"><strong>{instrument.name}</strong><small>{instrument.code}</small></td>
+                        <td data-label="平台">{instrument.platformNames.join("、")}<small>{instrument.assets.length} 笔持仓</small></td>
+                        <td data-label="合并市值"><strong>{money(instrument.marketValueCny, privateMode)}</strong></td>
+                        <td data-label="合并盈亏">
+                          <span className={instrument.profitCny >= 0 ? "positive" : "negative"}>
+                            {money(instrument.profitCny, privateMode)}<small>{instrument.profitPercent.toFixed(1)}%</small>
+                          </span>
+                        </td>
+                        <td data-label="操作">
+                          <button
+                            className="instrument-detail-button"
+                            onClick={() => setSelectedInstrument(
+                              selectedInstrument === instrument.key ? null : instrument.key,
+                            )}
+                          >
+                            {selectedInstrument === instrument.key ? "收起" : "查看持仓"}<ChevronRight size={14} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+          {(selected.key !== "fund" || selectedFund) && (
+          <div className="responsive-table position-detail-table">
             <table>
               <thead>
                 <tr>
@@ -370,7 +430,7 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
                 </tr>
               </thead>
               <tbody>
-                {selected.assets.map((asset) => (
+                {(selected.key === "fund" ? selectedFund?.assets || [] : selected.assets).map((asset) => (
                   <tr key={asset.id}>
                     <td data-label="资产">
                       <strong>{asset.name}</strong>
@@ -425,6 +485,7 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
               </tbody>
             </table>
           </div>
+          )}
         </section>
       )}
       <div className="group-list">
