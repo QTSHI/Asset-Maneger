@@ -2,13 +2,12 @@ import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   AlertCircle,
-  Archive,
   ArrowDownLeft,
   ArrowUpRight,
   Bell,
   CalendarDays,
   Check,
-  ChevronDown,
+  ChevronRight,
   CircleDollarSign,
   Clock3,
   Edit3,
@@ -22,6 +21,7 @@ import {
   ShieldCheck,
   Sparkles,
   Target,
+  Trash2,
   WalletCards,
   X,
 } from "lucide-react";
@@ -162,13 +162,7 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
   const [view, setView] = useState<"class" | "account">("class");
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<ValuedAsset | "new" | null>(null);
-  const [expanded, setExpanded] = useState<string[]>([
-    "cash",
-    "fund",
-    "stock",
-    "alternative",
-    "unclassified",
-  ]);
+  const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 
   const filtered = (assets.data || []).filter((asset) =>
     `${asset.name} ${asset.code} ${asset.accountName}`
@@ -178,18 +172,53 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
   const groups = useMemo(() => {
     const map = new Map<
       string,
-      { key: string; label: string; assets: ValuedAsset[]; value: number }
+      {
+        key: string;
+        label: string;
+        assets: ValuedAsset[];
+        value: number;
+        cost: number;
+        profit: number;
+      }
     >();
     for (const asset of filtered) {
       const key = String(view === "class" ? asset.classCode : asset.accountId);
       const label = view === "class" ? asset.classLabel : asset.accountName;
-      const item = map.get(key) || { key, label, assets: [], value: 0 };
+      const item = map.get(key) || {
+        key,
+        label,
+        assets: [],
+        value: 0,
+        cost: 0,
+        profit: 0,
+      };
       item.assets.push(asset);
       item.value += asset.marketValueCny;
+      item.cost += asset.costValueCny;
+      item.profit += asset.profitCny;
       map.set(key, item);
     }
-    return [...map.values()].sort((a, b) => b.value - a.value);
-  }, [filtered, view]);
+    const classOrder = ["cash", "fund", "stock", "alternative", "unclassified"];
+    if (view === "class" && !query) {
+      const labels: Record<string, string> = {
+        cash: "现金与现金等价物",
+        fund: "基金",
+        stock: "股票",
+        alternative: "另类资产",
+      };
+      for (const key of classOrder.slice(0, 4)) {
+        if (!map.has(key)) {
+          map.set(key, { key, label: labels[key], assets: [], value: 0, cost: 0, profit: 0 });
+        }
+      }
+    }
+    return [...map.values()].sort((a, b) =>
+      view === "class"
+        ? classOrder.indexOf(a.key) - classOrder.indexOf(b.key)
+        : b.value - a.value,
+    );
+  }, [filtered, view, query]);
+  const selected = groups.find((group) => group.key === selectedGroup);
 
   const archive = useMutation({
     mutationFn: (id: number) => api.delete(`/assets/${id}`),
@@ -238,13 +267,19 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
         <div className="segmented">
           <button
             className={view === "class" ? "active" : ""}
-            onClick={() => setView("class")}
+            onClick={() => {
+              setView("class");
+              setSelectedGroup(null);
+            }}
           >
             按资产类别
           </button>
           <button
             className={view === "account" ? "active" : ""}
-            onClick={() => setView("account")}
+            onClick={() => {
+              setView("account");
+              setSelectedGroup(null);
+            }}
           >
             按账户平台
           </button>
@@ -258,119 +293,114 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
           />
         </label>
       </div>
-      <div className="group-list">
-        {groups.map((group) => {
-          const open = expanded.includes(group.key);
+      <div className={`overview-card-grid ${view === "class" ? "four-columns" : ""}`}>
+        {groups.filter((group) => view !== "class" || group.key !== "unclassified").map((group) => {
+          const showProfit = view === "class" && ["fund", "stock"].includes(group.key);
+          const profitPercent = group.cost ? (group.profit / group.cost) * 100 : 0;
           return (
-            <section className="asset-group" key={group.key}>
-              <button
-                className="group-head"
-                onClick={() =>
-                  setExpanded(
-                    open
-                      ? expanded.filter((x) => x !== group.key)
-                      : [...expanded, group.key],
-                  )
-                }
-              >
-                <div>
-                  <span className={`asset-dot asset-${group.key}`} />
-                  <div>
-                    <strong>{group.label}</strong>
-                    <small>{group.assets.length} 项资产</small>
-                  </div>
-                </div>
-                <div>
-                  <strong>{money(group.value, privateMode)}</strong>
-                  <small>
-                    {total ? ((group.value / total) * 100).toFixed(1) : 0}%
-                  </small>
-                  <ChevronDown className={open ? "rotated" : ""} size={17} />
-                </div>
-              </button>
-              {open && (
-                <div className="responsive-table">
-                  <table>
-                    <thead>
-                      <tr>
-                        <th>资产</th>
-                        <th>账户</th>
-                        <th>类型</th>
-                        <th>现价</th>
-                        <th>市值</th>
-                        <th>盈亏</th>
-                        <th>行情</th>
-                        <th />
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {group.assets.map((asset) => (
-                        <tr key={asset.id}>
-                          <td data-label="资产">
-                            <strong>{asset.name}</strong>
-                            <small>
-                              {asset.code} · {asset.currency}
-                            </small>
-                          </td>
-                          <td data-label="账户">{asset.accountName}</td>
-                          <td data-label="类型">
-                            <span className="tag">{asset.subtypeLabel}</span>
-                          </td>
-                          <td data-label="现价">
-                            {asset.currentPrice.toLocaleString()}
-                          </td>
-                          <td data-label="市值">
-                            <strong>
-                              {money(asset.marketValueCny, privateMode)}
-                            </strong>
-                          </td>
-                          <td data-label="盈亏">
-                            <span
-                              className={
-                                asset.profitCny >= 0 ? "positive" : "negative"
-                              }
-                            >
-                              {money(asset.profitCny, privateMode)}
-                              <small>{asset.profitPercent.toFixed(1)}%</small>
-                            </span>
-                          </td>
-                          <td data-label="行情">
-                            <span className={`status ${asset.quote.status}`}>
-                              {asset.quote.status === "fresh"
-                                ? "已更新"
-                                : asset.quote.status === "missing"
-                                  ? "待更新"
-                                  : "已过期"}
-                            </span>
-                          </td>
-                          <td>
-                            <div className="row-actions">
-                              <button
-                                onClick={() => setEditing(asset)}
-                                aria-label="编辑"
-                              >
-                                <Edit3 size={15} />
-                              </button>
-                              <button
-                                onClick={() =>
-                                  confirm(`归档 ${asset.name}？`) &&
-                                  archive.mutate(asset.id)
-                                }
-                                aria-label="归档"
-                              >
-                                <Archive size={15} />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+            <button
+              className={`overview-card ${selectedGroup === group.key ? "selected" : ""}`}
+              key={group.key}
+              onClick={() => setSelectedGroup(group.key)}
+            >
+              <span className={`asset-dot asset-${group.key}`} />
+              <span>{group.label}</span>
+              <strong>{money(group.value, privateMode)}</strong>
+              <small>
+                {group.assets.length} 项 · {total ? ((group.value / total) * 100).toFixed(1) : 0}%
+              </small>
+              {showProfit && (
+                <em className={group.profit >= 0 ? "positive" : "negative"}>
+                  持有盈亏 {money(group.profit, privateMode)} · {profitPercent.toFixed(1)}%
+                </em>
               )}
-            </section>
+              <ChevronRight size={17} />
+            </button>
           );
         })}
+      </div>
+      {view === "class" && groups.some((group) => group.key === "unclassified") && (() => {
+        const group = groups.find((item) => item.key === "unclassified")!;
+        return (
+          <button
+            className={`unclassified-overview ${selectedGroup === group.key ? "selected" : ""}`}
+            onClick={() => setSelectedGroup(group.key)}
+          >
+            <AlertCircle size={18} />
+            <div>
+              <strong>待分类资产</strong>
+              <span>{group.assets.length} 项资产，需要进一步确认类别</span>
+            </div>
+            <b>{money(group.value, privateMode)}</b>
+            <ChevronRight size={17} />
+          </button>
+        );
+      })()}
+      {selected && (
+        <section className="asset-group selected-detail">
+          <div className="detail-head">
+            <div>
+              <span>{view === "class" ? "资产类别" : "账户平台"}</span>
+              <h3>{selected.label}</h3>
+              <p>{selected.assets.length} 项资产 · {money(selected.value, privateMode)}</p>
+            </div>
+            <button className="secondary-button" onClick={() => setSelectedGroup(null)}>
+              收起明细
+            </button>
+          </div>
+          <div className="responsive-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>资产</th>
+                  <th>账户</th>
+                  <th>类型</th>
+                  <th>现价</th>
+                  <th>市值</th>
+                  <th>盈亏</th>
+                  <th>行情</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {selected.assets.map((asset) => (
+                  <tr key={asset.id}>
+                    <td data-label="资产">
+                      <strong>{asset.name}</strong>
+                      <small>{asset.code} · {asset.currency}</small>
+                    </td>
+                    <td data-label="账户">{asset.accountName}</td>
+                    <td data-label="类型"><span className="tag">{asset.subtypeLabel}</span></td>
+                    <td data-label="现价">{asset.currentPrice.toLocaleString()}</td>
+                    <td data-label="市值"><strong>{money(asset.marketValueCny, privateMode)}</strong></td>
+                    <td data-label="盈亏">
+                      <span className={asset.profitCny >= 0 ? "positive" : "negative"}>
+                        {money(asset.profitCny, privateMode)}
+                        <small>{asset.profitPercent.toFixed(1)}%</small>
+                      </span>
+                    </td>
+                    <td data-label="行情">
+                      <span className={`status ${asset.quote.status}`}>
+                        {asset.quote.status === "fresh" ? "已更新" : asset.quote.status === "missing" ? "待更新" : "已过期"}
+                      </span>
+                    </td>
+                    <td data-label="操作">
+                      <div className="row-actions">
+                        <button onClick={() => setEditing(asset)} aria-label={`修改 ${asset.name}`}><Edit3 size={15} /></button>
+                        <button
+                          onClick={() => confirm(`删除 ${asset.name}？删除后将从当前统计中移除。`) && archive.mutate(asset.id)}
+                          aria-label={`删除 ${asset.name}`}
+                        ><Trash2 size={15} /></button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+      <div className="group-list">
         {!groups.length && (
           <EmptyState
             icon={<Landmark />}
@@ -665,7 +695,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
   const client = useQueryClient();
   const meta = useMeta();
   const [month, setMonth] = useState(currentMonth());
-  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<HouseholdTransaction | "new" | null>(null);
   const query = useQuery({
     queryKey: ["transactions", month],
     queryFn: () =>
@@ -709,7 +739,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
         title="实际收支"
         description="轻量记录家庭实际收入和支出，需要时再关联资产资金流。"
         action={
-          <button className="primary-button" onClick={() => setOpen(true)}>
+          <button className="primary-button" onClick={() => setEditing("new")}>
             <Plus size={16} /> 记一笔
           </button>
         }
@@ -744,6 +774,15 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
         <button className="filter-button">
           <ListFilter size={15} /> 全部分类
         </button>
+      </div>
+      <div className="cash-flow-explainer">
+        <Link2 size={18} />
+        <div>
+          <strong>资产联动是什么？</strong>
+          <p>
+            普通收支只进入家庭预算；联动后会在所选账户生成同金额的入金或出金记录，用于区分“投资涨跌”和“家庭资金进出”。它不会自动修改持仓数量或行情价格。
+          </p>
+        </div>
       </div>
       <section className="content-panel no-padding">
         <div className="responsive-table">
@@ -803,22 +842,28 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
                     ) : (
                       <button
                         className="link-button"
+                        disabled={!row.account_id}
+                        title={row.account_id ? "在该账户生成对应的入金或出金记录" : "请先修改这笔记录并选择账户"}
                         onClick={() => link.mutate(row.id)}
                       >
-                        关联资金流
+                        {row.account_id ? "同步到账户资金流" : "先选择账户"}
                       </button>
                     )}
                   </td>
-                  <td>
-                    <button
-                      className="icon-text-button"
-                      aria-label="归档收支记录"
-                      onClick={() =>
-                        confirm("归档这条收支记录？") && archive.mutate(row)
-                      }
-                    >
-                      <Archive size={14} />
-                    </button>
+                  <td data-label="操作">
+                    <div className="record-actions">
+                      <button onClick={() => setEditing(row)}>
+                        <Edit3 size={13} /> 修改
+                      </button>
+                      <button
+                        className="danger"
+                        onClick={() =>
+                          confirm("确定删除这条收支记录？删除后它会从当月统计和预算中移除。") && archive.mutate(row)
+                        }
+                      >
+                        <Trash2 size={13} /> 删除
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -833,12 +878,13 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
           />
         )}
       </section>
-      {open && meta.data && (
+      {editing && meta.data && (
         <TransactionForm
           meta={meta.data}
-          onClose={() => setOpen(false)}
+          transaction={editing === "new" ? undefined : editing}
+          onClose={() => setEditing(null)}
           onSaved={() => {
-            setOpen(false);
+            setEditing(null);
             client.invalidateQueries({ queryKey: ["transactions"] });
             client.invalidateQueries({ queryKey: ["budget"] });
             client.invalidateQueries({ queryKey: ["dashboard"] });
@@ -851,16 +897,23 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
 
 function TransactionForm({
   meta,
+  transaction,
   onClose,
   onSaved,
 }: {
   meta: MetaData;
+  transaction?: HouseholdTransaction;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const [kind, setKind] = useState<"income" | "expense">("expense");
+  const [kind, setKind] = useState<"income" | "expense">(
+    transaction?.kind || "expense",
+  );
   const mutation = useMutation({
-    mutationFn: (body: unknown) => api.post("/household/transactions", body),
+    mutationFn: (body: unknown) =>
+      transaction
+        ? api.patch(`/household/transactions/${transaction.id}`, body)
+        : api.post("/household/transactions", body),
     onSuccess: onSaved,
   });
   const submit = (event: FormEvent<HTMLFormElement>) => {
@@ -870,14 +923,20 @@ function TransactionForm({
       kind,
       amount: Number(f.get("amount")),
       currency_id: Number(f.get("currency_id")),
+      ...(f.get("fx_rate_to_cny")
+        ? { fx_rate_to_cny: Number(f.get("fx_rate_to_cny")) }
+        : {}),
       category_id: Number(f.get("category_id")),
       account_id: f.get("account_id") ? Number(f.get("account_id")) : null,
       occurred_on: f.get("occurred_on"),
       note: f.get("note"),
+      ...(transaction?.linked_cash_flow_id
+        ? { linked_action: f.get("linked_action") }
+        : {}),
     });
   };
   return (
-    <Modal title="记录家庭收支" onClose={onClose}>
+    <Modal title={transaction ? "修改收支记录" : "记录家庭收支"} onClose={onClose}>
       <form className="form-grid" onSubmit={submit}>
         <div className="kind-switch span-2">
           <button
@@ -902,6 +961,7 @@ function TransactionForm({
             type="number"
             min="0.01"
             step="any"
+            defaultValue={transaction?.amount}
             required
             autoFocus
           />
@@ -910,7 +970,7 @@ function TransactionForm({
           <span>币种</span>
           <select
             name="currency_id"
-            defaultValue={meta.currencies.find((x) => x.code === "CNY")?.id}
+            defaultValue={transaction?.currency_id || meta.currencies.find((x) => x.code === "CNY")?.id}
           >
             {meta.currencies.map((x) => (
               <option value={x.id} key={x.id}>
@@ -921,7 +981,7 @@ function TransactionForm({
         </label>
         <label>
           <span>分类</span>
-          <select name="category_id" required>
+          <select name="category_id" defaultValue={transaction?.category_id} required>
             {meta.categories
               .filter((x) => x.kind === kind)
               .map((x) => (
@@ -932,8 +992,19 @@ function TransactionForm({
           </select>
         </label>
         <label>
+          <span>记账汇率（兑 CNY）</span>
+          <input
+            name="fx_rate_to_cny"
+            type="number"
+            min="0.000001"
+            step="any"
+            defaultValue={transaction?.fx_rate_to_cny}
+            placeholder="留空则使用当前汇率"
+          />
+        </label>
+        <label>
           <span>账户（可选）</span>
-          <select name="account_id">
+          <select name="account_id" defaultValue={transaction?.account_id || ""}>
             <option value="">暂不关联</option>
             {meta.accounts.map((x) => (
               <option value={x.id} key={x.id}>
@@ -947,14 +1018,23 @@ function TransactionForm({
           <input
             name="occurred_on"
             type="date"
-            defaultValue={today()}
+            defaultValue={transaction?.occurred_on || today()}
             required
           />
         </label>
         <label>
           <span>备注</span>
-          <input name="note" placeholder="例如：家庭采购" />
+          <input name="note" defaultValue={transaction?.note} placeholder="例如：家庭采购" />
         </label>
+        {transaction?.linked_cash_flow_id && (
+          <label className="span-2">
+            <span>已关联的资产资金流</span>
+            <select name="linked_action" defaultValue="sync">
+              <option value="sync">同步更新资金流</option>
+              <option value="unlink">解除关联，原资金流归档</option>
+            </select>
+          </label>
+        )}
         {mutation.error && (
           <p className="form-error span-2">{mutation.error.message}</p>
         )}
@@ -1378,7 +1458,12 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
     queryKey: ["accounts"],
     queryFn: () => api.get<any[]>("/accounts"),
   });
+  const assets = useQuery({
+    queryKey: ["assets"],
+    queryFn: () => api.get<ValuedAsset[]>("/assets"),
+  });
   const [open, setOpen] = useState(false);
+  const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
   const accountLabels: Record<string, string> = {
     investment: "投资账户",
     bank: "银行账户",
@@ -1387,6 +1472,27 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
     credit: "信用账户",
     other: "其他账户",
   };
+  const platformGroups = useMemo(() => {
+    const map = new Map<
+      string,
+      { name: string; accounts: any[]; assets: ValuedAsset[]; value: number }
+    >();
+    for (const account of query.data || []) {
+      const name = String(account.name).split(" · ")[0];
+      const group = map.get(name) || { name, accounts: [], assets: [], value: 0 };
+      group.accounts.push(account);
+      map.set(name, group);
+    }
+    for (const asset of assets.data || []) {
+      const name = String(asset.accountName).split(" · ")[0];
+      const group = map.get(name) || { name, accounts: [], assets: [], value: 0 };
+      group.assets.push(asset);
+      group.value += asset.marketValueCny;
+      map.set(name, group);
+    }
+    return [...map.values()].sort((a, b) => b.value - a.value);
+  }, [query.data, assets.data]);
+  const selected = platformGroups.find((group) => group.name === selectedPlatform);
   return (
     <div className="page-stack">
       <PageHead
@@ -1400,24 +1506,83 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
         }
       />
       <div className="account-card-grid">
-        {query.data?.map((account) => (
-          <article className="account-card" key={account.id}>
-            <div className={`account-card-icon type-${account.account_type}`}>
+        {platformGroups.map((platform) => (
+          <button
+            className={`account-card account-overview-card ${selectedPlatform === platform.name ? "selected" : ""}`}
+            key={platform.name}
+            onClick={() => setSelectedPlatform(platform.name)}
+          >
+            <div className={`account-card-icon type-${platform.accounts[0]?.account_type || "other"}`}>
               <Landmark />
             </div>
             <div>
-              <span>{accountLabels[account.account_type] || "其他账户"}</span>
-              <h3>{account.name}</h3>
+              <span>
+                {[...new Set(platform.accounts.map((account) => accountLabels[account.account_type] || "其他账户"))].join(" / ")}
+              </span>
+              <h3>{platform.name}</h3>
               <p>
-                {account.currency_code || "未设默认币种"} ·{" "}
-                {account.asset_count} 项资产
+                {platform.accounts.length} 个账户 · {platform.assets.length} 项资产
               </p>
             </div>
-            <strong>{money(account.market_value_cny, privateMode)}</strong>
-          </article>
+            <strong>{money(platform.value, privateMode)}</strong>
+            <ChevronRight size={17} />
+          </button>
         ))}
       </div>
-      {!query.data?.length && (
+      {selected && (
+        <section className="content-panel no-padding selected-detail">
+          <div className="detail-head">
+            <div>
+              <span>平台明细</span>
+              <h3>{selected.name}</h3>
+              <p>
+                {selected.accounts.map((account) => account.name).join("、")} · {money(selected.value, privateMode)}
+              </p>
+            </div>
+            <button className="secondary-button" onClick={() => setSelectedPlatform(null)}>收起明细</button>
+          </div>
+          {selected.assets.length ? (
+            <div className="responsive-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>资产</th>
+                    <th>账户</th>
+                    <th>类别</th>
+                    <th>市值</th>
+                    <th>盈亏</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selected.assets
+                    .slice()
+                    .sort((a, b) => b.marketValueCny - a.marketValueCny)
+                    .map((asset) => (
+                      <tr key={asset.id}>
+                        <td data-label="资产"><strong>{asset.name}</strong><small>{asset.code}</small></td>
+                        <td data-label="账户">{asset.accountName}</td>
+                        <td data-label="类别"><span className="tag">{asset.classLabel}</span></td>
+                        <td data-label="市值"><strong>{money(asset.marketValueCny, privateMode)}</strong></td>
+                        <td data-label="盈亏">
+                          <span className={asset.profitCny >= 0 ? "positive" : "negative"}>
+                            {money(asset.profitCny, privateMode)}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <EmptyState
+              icon={<WalletCards />}
+              title="这个平台暂无资产持仓"
+              text="它仍可作为家庭收支账户使用。"
+            />
+          )}
+        </section>
+      )}
+      {!platformGroups.length && (
         <EmptyState
           icon={<CircleDollarSign />}
           title="还没有账户"

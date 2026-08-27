@@ -125,14 +125,29 @@ function allocation(items, key, labelKey) {
   const grouped = new Map();
   for (const item of items) {
     const code = item[key];
-    const entry = grouped.get(code) || { code, label: item[labelKey], valueCny: 0, count: 0 };
+    const entry = grouped.get(code) || {
+      code,
+      label: item[labelKey],
+      valueCny: 0,
+      costValueCny: 0,
+      profitCny: 0,
+      count: 0
+    };
     entry.valueCny = money(new Decimal(entry.valueCny).plus(item.marketValueCny));
+    entry.costValueCny = money(new Decimal(entry.costValueCny).plus(item.costValueCny));
+    entry.profitCny = money(new Decimal(entry.profitCny).plus(item.profitCny));
     entry.count += 1;
     grouped.set(code, entry);
   }
   const total = items.reduce((sum, item) => sum.plus(item.marketValueCny), new Decimal(0));
   return [...grouped.values()]
-    .map((entry) => ({ ...entry, percent: total.gt(0) ? money(new Decimal(entry.valueCny).div(total).times(100)) : 0 }))
+    .map((entry) => ({
+      ...entry,
+      percent: total.gt(0) ? money(new Decimal(entry.valueCny).div(total).times(100)) : 0,
+      profitPercent: entry.costValueCny > 0
+        ? money(new Decimal(entry.profitCny).div(entry.costValueCny).times(100))
+        : 0
+    }))
     .sort((a, b) => b.valueCny - a.valueCny);
 }
 

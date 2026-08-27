@@ -72,4 +72,20 @@ describe('Stone Wealth data model', () => {
     expect(dashboard.household.totals.expense).toBe(80);
     expect(dashboard.totals.marketValueCny).toBe(1000);
   });
+
+  it('reports investment profit inside the fund allocation', () => {
+    const cny = db.prepare("SELECT id FROM currencies WHERE code='CNY'").get().id;
+    const fundType = db.prepare("SELECT id FROM asset_types WHERE name='fund'").get().id;
+    const account = db.prepare("SELECT id FROM platforms WHERE name='Test Bank'").get().id;
+    const asset = db.prepare('INSERT INTO assets (code, name, shares, cost_price, asset_type_id, platform_id, currency_id) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run('TEST-FUND', 'Test Fund', 10, 8, fundType, account, cny);
+    db.prepare(`INSERT INTO quote_cache (cache_key, code, asset_type, price, currency_code, status) VALUES ('TEST-FUND_fund', 'TEST-FUND', 'fund', 10, 'CNY', 'fresh')`).run();
+
+    const dashboard = wealth.getDashboard({ month: '2026-08', range: 'ALL' });
+    const fund = dashboard.allocations.byClass.find((row: any) => row.code === 'fund');
+    expect(fund).toMatchObject({ valueCny: 100, costValueCny: 80, profitCny: 20, profitPercent: 25 });
+
+    db.prepare('DELETE FROM assets WHERE id = ?').run(Number(asset.lastInsertRowid));
+    db.prepare("DELETE FROM quote_cache WHERE cache_key = 'TEST-FUND_fund'").run();
+  });
 });

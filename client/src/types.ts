@@ -5,6 +5,9 @@ export interface AllocationItem {
   code: string | number;
   label: string;
   valueCny: number;
+  costValueCny?: number;
+  profitCny?: number;
+  profitPercent?: number;
   count: number;
   percent: number;
   color?: string;
@@ -68,10 +71,15 @@ export interface HouseholdTransaction {
   kind: "income" | "expense";
   amount: number;
   amount_cny: number;
+  currency_id: number;
+  fx_rate_to_cny: number;
   currency_code: string;
+  category_id: number;
   category_name: string;
   category_color: string;
+  account_id?: number | null;
   account_name?: string | null;
+  project_id?: number | null;
   project_name?: string | null;
   occurred_on: string;
   note?: string;

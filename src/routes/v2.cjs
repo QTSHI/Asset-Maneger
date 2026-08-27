@@ -356,7 +356,7 @@ router.patch('/household/transactions/:id', handler(async (req, res) => {
   input.amount_cny = wealth.money(merged.amount * rate);
   const user = username(req);
   updateRecord('household_transactions', id, input, ['kind', 'amount', 'currency_id', 'fx_rate_to_cny', 'amount_cny', 'category_id', 'account_id', 'project_id', 'occurred_on', 'note', 'updated_by', 'updated_at'], user);
-  const after = getRecord('household_transactions', id);
+  let after = getRecord('household_transactions', id);
   if (before.linked_cash_flow_id && input.linked_action === 'sync') {
     db.prepare(`UPDATE cash_flows SET amount = ?, currency_id = ?, account_id = ?, occurred_on = ?, note = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
       .run(after.amount, after.currency_id, after.account_id, after.occurred_on, after.note, user, before.linked_cash_flow_id);
@@ -364,6 +364,7 @@ router.patch('/household/transactions/:id', handler(async (req, res) => {
     db.prepare('UPDATE cash_flows SET archived_at = CURRENT_TIMESTAMP, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, before.linked_cash_flow_id);
     db.prepare('UPDATE household_transactions SET linked_cash_flow_id = NULL WHERE id = ?').run(id);
   }
+  after = getRecord('household_transactions', id);
   audit('household_transaction', id, 'update', user, before, after);
   ok(res, after);
 }));
@@ -379,7 +380,12 @@ router.delete('/household/transactions/:id', handler(async (req, res) => {
   const user = username(req);
   db.transaction(() => {
     db.prepare('UPDATE household_transactions SET archived_at = CURRENT_TIMESTAMP, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, id);
-    if (before.linked_cash_flow_id) db.prepare('UPDATE cash_flows SET archived_at = CURRENT_TIMESTAMP, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, before.linked_cash_flow_id);
+    if (before.linked_cash_flow_id && linkedAction === 'sync') {
+      db.prepare('UPDATE cash_flows SET archived_at = CURRENT_TIMESTAMP, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, before.linked_cash_flow_id);
+    } else if (before.linked_cash_flow_id && linkedAction === 'unlink') {
+      db.prepare('UPDATE cash_flows SET source_transaction_id = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, before.linked_cash_flow_id);
+      db.prepare('UPDATE household_transactions SET linked_cash_flow_id = NULL WHERE id = ?').run(id);
+    }
   })();
   audit('household_transaction', id, 'archive', user, before, getRecord('household_transactions', id));
   res.status(204).end();
@@ -391,6 +397,8 @@ router.post('/household/transactions/:id/link-cash-flow', handler(async (req, re
   if (!transaction || transaction.archived_at) return fail(res, 404, 'NOT_FOUND', '收支记录不存在');
   if (transaction.linked_cash_flow_id) return fail(res, 409, 'ALREADY_LINKED', '该记录已经关联资产资金流');
   const input = parse(z.object({ account_id: optionalId, note: z.string().max(500).optional() }), req.body || {});
+  const accountId = input.account_id || transaction.account_id;
+  if (!accountId) return fail(res, 400, 'ACCOUNT_REQUIRED', '关联资产资金流前，请先为这笔收支选择账户');
   const user = username(req);
   const flowType = transaction.kind === 'income' ? 'deposit' : 'withdrawal';
   let flowId;
@@ -398,7 +406,7 @@ router.post('/household/transactions/:id/link-cash-flow', handler(async (req, re
     const result = db.prepare(`
       INSERT INTO cash_flows (flow_type, amount, currency_id, account_id, occurred_on, note, source_transaction_id, created_by, updated_by)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).run(flowType, transaction.amount, transaction.currency_id, input.account_id || transaction.account_id || null, transaction.occurred_on, input.note || transaction.note, id, user, user);
+    `).run(flowType, transaction.amount, transaction.currency_id, accountId, transaction.occurred_on, input.note || transaction.note, id, user, user);
     flowId = Number(result.lastInsertRowid);
     db.prepare('UPDATE household_transactions SET linked_cash_flow_id = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(flowId, user, id);
   })();

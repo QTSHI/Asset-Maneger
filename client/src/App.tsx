@@ -2,20 +2,13 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { NavLink, Route, Routes } from "react-router-dom";
 import {
-  Area,
-  AreaChart,
-  CartesianGrid,
   Cell,
   Pie,
   PieChart,
   ResponsiveContainer,
   Tooltip,
-  XAxis,
-  YAxis,
 } from "recharts";
 import {
-  ArrowDownRight,
-  ArrowUpRight,
   Bell,
   ChevronRight,
   CircleDollarSign,
@@ -214,25 +207,9 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
         count: 0,
       },
   );
-  const trend =
-    data.trend.length > 1
-      ? data.trend
-      : [
-          {
-            date: "起点",
-            value: data.totals.costValueCny,
-            cost: data.totals.costValueCny,
-            profit: 0,
-            cashFlow: 0,
-          },
-          {
-            date: "现在",
-            value: data.totals.marketValueCny,
-            cost: data.totals.costValueCny,
-            profit: data.totals.profitCny,
-            cashFlow: 0,
-          },
-        ];
+  const unclassified = data.allocations.byClass.find(
+    (item) => item.code === "unclassified",
+  );
 
   return (
     <div className="dashboard-grid">
@@ -248,102 +225,41 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
         </div>
         <div className="hero-metrics">
           <div>
-            <span>持仓成本</span>
-            <strong>{currency(data.totals.costValueCny)}</strong>
+            <span>资产项目</span>
+            <strong>{data.totals.assetCount}</strong>
           </div>
           <div>
-            <span>累计盈亏</span>
-            <strong
-              className={data.totals.profitCny >= 0 ? "positive" : "negative"}
-            >
-              {currency(data.totals.profitCny)}
-            </strong>
-            <small
-              className={data.totals.profitCny >= 0 ? "positive" : "negative"}
-            >
-              {data.totals.profitCny >= 0 ? (
-                <ArrowUpRight size={14} />
-              ) : (
-                <ArrowDownRight size={14} />
-              )}{" "}
-              {data.totals.profitPercent.toFixed(2)}%
-            </small>
+            <span>账户平台</span>
+            <strong>{data.totals.accountCount}</strong>
           </div>
           <div>
-            <span>资产 / 账户</span>
-            <strong>
-              {data.totals.assetCount} <em>/</em> {data.totals.accountCount}
-            </strong>
+            <span>待分类资产</span>
+            <strong>{currency(unclassified?.valueCny || 0)}</strong>
           </div>
-        </div>
-      </section>
-
-      <section className="panel trend-panel">
-        <PanelTitle
-          title="资产趋势"
-          subtitle="近三个月"
-          action={
-            <button className="text-button">
-              查看详情 <ChevronRight size={15} />
-            </button>
-          }
-        />
-        <div className="chart-wrap">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart
-              data={trend}
-              margin={{ top: 8, right: 8, bottom: 0, left: 0 }}
-            >
-              <defs>
-                <linearGradient id="wealthArea" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0" stopColor="#0f766e" stopOpacity={0.28} />
-                  <stop offset="1" stopColor="#0f766e" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid
-                vertical={false}
-                stroke="var(--line)"
-                strokeDasharray="3 5"
-              />
-              <XAxis
-                dataKey="date"
-                axisLine={false}
-                tickLine={false}
-                tick={{ fill: "var(--muted)", fontSize: 11 }}
-                tickFormatter={(v) => String(v).slice(5)}
-              />
-              <YAxis hide domain={["dataMin - 100", "dataMax + 100"]} />
-              <Tooltip
-                formatter={(value) => currency(Number(value))}
-                contentStyle={{
-                  borderRadius: 12,
-                  border: "1px solid var(--line)",
-                  background: "var(--surface)",
-                }}
-              />
-              <Area
-                type="monotone"
-                dataKey="value"
-                stroke="#0f766e"
-                strokeWidth={2.5}
-                fill="url(#wealthArea)"
-              />
-            </AreaChart>
-          </ResponsiveContainer>
         </div>
       </section>
 
       <section className="asset-class-grid">
         {classCards.map((item, index) => (
-          <article className="class-card" key={String(item.code)}>
+          <article
+            className={`class-card ${item.code === "fund" || item.code === "stock" ? "with-profit" : ""}`}
+            key={String(item.code)}
+          >
             <div className={`class-icon tone-${index}`}>
               <span />
             </div>
             <div>
               <span>{item.label}</span>
               <strong>{currency(item.valueCny, true)}</strong>
+              {(item.code === "fund" || item.code === "stock") && (
+                <small
+                  className={(item.profitCny || 0) >= 0 ? "positive" : "negative"}
+                >
+                  持有盈亏 {currency(item.profitCny || 0)} · {Number(item.profitPercent || 0).toFixed(1)}%
+                </small>
+              )}
             </div>
-            <small>{item.percent.toFixed(1)}%</small>
+            <small className="class-share">{item.percent.toFixed(1)}%</small>
           </article>
         ))}
       </section>
