@@ -25,6 +25,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { api } from "./api";
+import { currentMonth, MonthNavigator, monthLabel } from "./dateControls";
 import type { DashboardData } from "./types";
 import {
   AccountsPage,
@@ -162,7 +163,7 @@ function App() {
 }
 
 function Dashboard({ privateMode }: { privateMode: boolean }) {
-  const month = new Date().toISOString().slice(0, 7);
+  const [month, setMonth] = useState(currentMonth());
   const query = useQuery({
     queryKey: ["dashboard", month],
     queryFn: () => api.get<DashboardData>(`/dashboard?month=${month}&range=3M`),
@@ -213,6 +214,13 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
 
   return (
     <div className="dashboard-grid">
+      <section className="dashboard-period">
+        <div>
+          <span>家庭财务月份</span>
+          <strong>{monthLabel(month)}</strong>
+        </div>
+        <MonthNavigator month={month} onChange={setMonth} />
+      </section>
       <section className="hero-card">
         <div className="hero-head">
           <div>
@@ -307,7 +315,7 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
 
       <section className="panel budget-panel">
         <PanelTitle
-          title="本月家庭预算"
+          title="家庭预算"
           subtitle={data.household.month.replace("-", " 年 ") + " 月"}
           action={
             <button className="text-button">

@@ -11,14 +11,34 @@ process.env.NODE_ENV = 'test';
 let db: any;
 let wealth: any;
 let trading212: any;
+let apiServer: any;
+let apiBaseUrl: string;
 
-beforeAll(() => {
+beforeAll(async () => {
   db = require('../src/services/database.cjs');
   wealth = require('../src/services/wealthService.cjs');
   trading212 = require('../src/services/trading212Service.cjs');
+  const express = require('express');
+  const app = express();
+  app.use(express.json());
+  app.use((req: any, _res: any, next: any) => {
+    req.user = { username: 'route-test' };
+    next();
+  });
+  app.use('/api/v2', require('../src/routes/v2.cjs'));
+  await new Promise<void>((resolve) => {
+    apiServer = app.listen(0, '127.0.0.1', resolve);
+  });
+  const address = apiServer.address();
+  apiBaseUrl = `http://127.0.0.1:${address.port}/api/v2`;
 });
 
-afterAll(() => {
+afterAll(async () => {
+  if (apiServer) {
+    await new Promise<void>((resolve, reject) =>
+      apiServer.close((error: Error | undefined) => error ? reject(error) : resolve()),
+    );
+  }
   db?.close();
   for (const suffix of ['', '-wal', '-shm']) {
     const file = `${testDb}${suffix}`;
@@ -87,5 +107,27 @@ describe('Stone Wealth data model', () => {
 
     db.prepare('DELETE FROM assets WHERE id = ?').run(Number(asset.lastInsertRowid));
     db.prepare("DELETE FROM quote_cache WHERE cache_key = 'TEST-FUND_fund'").run();
+  });
+
+  it('deletes a household transaction through the API and removes it from the month list', async () => {
+    const cny = db.prepare("SELECT id FROM currencies WHERE code='CNY'").get().id;
+    const category = db.prepare("SELECT id FROM household_categories WHERE kind='expense' LIMIT 1").get().id;
+    const inserted = db.prepare(`
+      INSERT INTO household_transactions
+        (kind, amount, currency_id, fx_rate_to_cny, amount_cny, category_id, occurred_on, note)
+      VALUES ('expense', 12.34, ?, 1, 12.34, ?, '2031-04-18', 'DELETE-ROUTE-TEST')
+    `).run(cny, category);
+    const id = Number(inserted.lastInsertRowid);
+
+    const deleted = await fetch(`${apiBaseUrl}/household/transactions/${id}`, {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    expect(deleted.status).toBe(204);
+
+    const response = await fetch(`${apiBaseUrl}/household/transactions?month=2031-04`);
+    const payload = await response.json();
+    expect(payload.data.some((row: any) => row.id === id)).toBe(false);
+    expect(db.prepare('SELECT archived_at FROM household_transactions WHERE id = ?').get(id).archived_at).toBeTruthy();
   });
 });

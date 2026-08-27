@@ -17,6 +17,24 @@ test('transaction page explains asset linkage', async ({ page }) => {
   await expect(page.getByText('它不会自动修改持仓数量或行情价格。')).toBeVisible();
 });
 
+test('month controls can navigate to future periods', async ({ page }) => {
+  await page.goto('/#/transactions');
+  const transactionMonth = page.getByLabel('选择月份');
+  const initialMonth = await transactionMonth.inputValue();
+  const [year, month] = initialMonth.split('-').map(Number);
+  const next = new Date(year, month, 1, 12);
+  const expectedNext = `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, '0')}`;
+  await page.getByRole('button', { name: '下一个月' }).click();
+  await expect(transactionMonth).toHaveValue(expectedNext);
+  await page.getByRole('button', { name: '记一笔' }).click();
+  await expect(page.locator('input[name="occurred_on"]')).toHaveValue(`${expectedNext}-01`);
+  await page.keyboard.press('Escape');
+
+  await page.goto('/#/plans');
+  await page.getByRole('button', { name: '下一个月' }).click();
+  await expect(page.getByRole('heading', { name: new RegExp(`${next.getFullYear()} 年 ${next.getMonth() + 1} 月大额事项日历`) })).toBeVisible();
+});
+
 test('responsive navigation is usable with no page overflow', async ({ page }) => {
   await page.goto('/');
   const width = page.viewportSize()?.width || 1440;

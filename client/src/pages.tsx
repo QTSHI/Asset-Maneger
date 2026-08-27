@@ -26,6 +26,13 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
+import {
+  currentMonth,
+  MonthNavigator,
+  monthLabel,
+  shiftMonth,
+  today,
+} from "./dateControls";
 import type {
   DashboardData,
   FinancialMemo,
@@ -44,8 +51,6 @@ const money = (value: number, hidden = false) =>
         currency: "CNY",
         maximumFractionDigits: 2,
       }).format(value || 0);
-const today = () => new Date().toISOString().slice(0, 10);
-const currentMonth = () => new Date().toISOString().slice(0, 7);
 
 function PageHead({
   eyebrow,
@@ -574,9 +579,7 @@ export function BudgetPage({ privateMode }: { privateMode: boolean }) {
       client.invalidateQueries({ queryKey: ["dashboard"] });
     },
   });
-  const previous = new Date(`${month}-01T00:00:00`);
-  previous.setMonth(previous.getMonth() - 1);
-  const previousMonth = previous.toISOString().slice(0, 7);
+  const previousMonth = shiftMonth(month, -1);
   const copy = useMutation({
     mutationFn: () =>
       api.post("/household/budgets/copy", {
@@ -593,14 +596,7 @@ export function BudgetPage({ privateMode }: { privateMode: boolean }) {
         title="家庭预算"
         description="按月安排家庭开支，实际收支独立记录，不自动影响资产。"
         action={
-          <div className="month-control">
-            <CalendarDays size={16} />
-            <input
-              type="month"
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
-            />
-          </div>
+          <MonthNavigator month={month} onChange={setMonth} label="预算月份" />
         }
       />
       {data && (
@@ -684,7 +680,7 @@ export function BudgetPage({ privateMode }: { privateMode: boolean }) {
             })}
         </div>
         <div className="content-actions">
-          <SubmitButton pending={save.isPending} children="保存本月预算" />
+          <SubmitButton pending={save.isPending} children="保存该月预算" />
         </div>
       </section>
     </div>
@@ -696,6 +692,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
   const meta = useMeta();
   const [month, setMonth] = useState(currentMonth());
   const [editing, setEditing] = useState<HouseholdTransaction | "new" | null>(null);
+  const [deleting, setDeleting] = useState<HouseholdTransaction | null>(null);
   const query = useQuery({
     queryKey: ["transactions", month],
     queryFn: () =>
@@ -707,22 +704,24 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
     onSuccess: () => client.invalidateQueries({ queryKey: ["transactions"] }),
   });
   const archive = useMutation({
-    mutationFn: (row: HouseholdTransaction) =>
+    mutationFn: ({
+      row,
+      linkedAction,
+    }: {
+      row: HouseholdTransaction;
+      linkedAction?: "sync" | "unlink";
+    }) =>
       api.delete(
         `/household/transactions/${row.id}`,
-        row.linked_cash_flow_id
-          ? {
-              linked_action: confirm(
-                "这笔收支已关联资产资金流。确定：同步归档资金流；取消：解除关联后归档。",
-              )
-                ? "sync"
-                : "unlink",
-            }
-          : undefined,
+        row.linked_cash_flow_id ? { linked_action: linkedAction } : undefined,
       ),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["transactions"] });
-      client.invalidateQueries({ queryKey: ["budget"] });
+    onSuccess: async () => {
+      await Promise.all([
+        client.invalidateQueries({ queryKey: ["transactions"] }),
+        client.invalidateQueries({ queryKey: ["budget"] }),
+        client.invalidateQueries({ queryKey: ["dashboard"] }),
+      ]);
+      setDeleting(null);
     },
   });
   const rows = query.data || [];
@@ -746,11 +745,11 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
       />
       <div className="summary-strip">
         <div>
-          <span>本月收入</span>
+          <span>该月收入</span>
           <strong className="positive">{money(income, privateMode)}</strong>
         </div>
         <div>
-          <span>本月支出</span>
+          <span>该月支出</span>
           <strong className="negative">{money(expense, privateMode)}</strong>
         </div>
         <div>
@@ -763,14 +762,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
         </div>
       </div>
       <div className="toolbar">
-        <div className="month-control">
-          <CalendarDays size={16} />
-          <input
-            type="month"
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-          />
-        </div>
+        <MonthNavigator month={month} onChange={setMonth} label="收支月份" />
         <button className="filter-button">
           <ListFilter size={15} /> 全部分类
         </button>
@@ -856,10 +848,9 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
                         <Edit3 size={13} /> 修改
                       </button>
                       <button
+                        type="button"
                         className="danger"
-                        onClick={() =>
-                          confirm("确定删除这条收支记录？删除后它会从当月统计和预算中移除。") && archive.mutate(row)
-                        }
+                        onClick={() => setDeleting(row)}
                       >
                         <Trash2 size={13} /> 删除
                       </button>
@@ -881,6 +872,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
       {editing && meta.data && (
         <TransactionForm
           meta={meta.data}
+          initialMonth={month}
           transaction={editing === "new" ? undefined : editing}
           onClose={() => setEditing(null)}
           onSaved={() => {
@@ -891,17 +883,90 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
           }}
         />
       )}
+      {deleting && (
+        <DeleteTransactionDialog
+          transaction={deleting}
+          pending={archive.isPending}
+          error={archive.error?.message}
+          onClose={() => {
+            if (!archive.isPending) setDeleting(null);
+          }}
+          onConfirm={(linkedAction) =>
+            archive.mutate({ row: deleting, linkedAction })
+          }
+        />
+      )}
     </div>
+  );
+}
+
+function DeleteTransactionDialog({
+  transaction,
+  pending,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  transaction: HouseholdTransaction;
+  pending: boolean;
+  error?: string;
+  onClose: () => void;
+  onConfirm: (linkedAction?: "sync" | "unlink") => void;
+}) {
+  const [linkedAction, setLinkedAction] = useState<"sync" | "unlink">("sync");
+  return (
+    <Modal title="确认删除收支记录" onClose={onClose}>
+      <div className="delete-dialog">
+        <div className="delete-summary">
+          <Trash2 size={20} />
+          <div>
+            <strong>{transaction.occurred_on} · {transaction.note || transaction.category_name}</strong>
+            <span>
+              {transaction.kind === "income" ? "收入" : "支出"} · {money(transaction.amount_cny)}
+            </span>
+          </div>
+        </div>
+        <p>删除后，这笔记录会立即从当月收支、预算实际值和总览统计中移除。</p>
+        {transaction.linked_cash_flow_id && (
+          <label className="delete-link-choice">
+            <span>这笔记录已关联资产资金流</span>
+            <select
+              value={linkedAction}
+              onChange={(event) => setLinkedAction(event.target.value as "sync" | "unlink")}
+            >
+              <option value="sync">同时归档关联的资金流</option>
+              <option value="unlink">只删除收支，保留原资金流</option>
+            </select>
+          </label>
+        )}
+        {error && <p className="form-error">删除失败：{error}</p>}
+        <div className="form-actions">
+          <button type="button" className="secondary-button" disabled={pending} onClick={onClose}>
+            取消
+          </button>
+          <button
+            type="button"
+            className="danger-button"
+            disabled={pending}
+            onClick={() => onConfirm(transaction.linked_cash_flow_id ? linkedAction : undefined)}
+          >
+            <Trash2 size={14} /> {pending ? "正在删除…" : "确认删除"}
+          </button>
+        </div>
+      </div>
+    </Modal>
   );
 }
 
 function TransactionForm({
   meta,
+  initialMonth,
   transaction,
   onClose,
   onSaved,
 }: {
   meta: MetaData;
+  initialMonth: string;
   transaction?: HouseholdTransaction;
   onClose: () => void;
   onSaved: () => void;
@@ -1018,7 +1083,10 @@ function TransactionForm({
           <input
             name="occurred_on"
             type="date"
-            defaultValue={transaction?.occurred_on || today()}
+            defaultValue={
+              transaction?.occurred_on ||
+              (initialMonth === currentMonth() ? today() : `${initialMonth}-01`)
+            }
             required
           />
         </label>
@@ -1053,27 +1121,59 @@ export function PlansPage({ privateMode }: { privateMode: boolean }) {
   const client = useQueryClient();
   const meta = useMeta();
   const [modal, setModal] = useState<"project" | "memo" | null>(null);
+  const [calendarMonth, setCalendarMonth] = useState(currentMonth());
   const dashboard = useQuery({
-    queryKey: ["dashboard-plans"],
+    queryKey: ["dashboard-plans", calendarMonth],
     queryFn: () =>
-      api.get<DashboardData>(`/dashboard?month=${currentMonth()}&range=1M`),
+      api.get<DashboardData>(`/dashboard?month=${calendarMonth}&range=1M`),
+  });
+  const memoQuery = useQuery({
+    queryKey: ["memos"],
+    queryFn: () => api.get<FinancialMemo[]>("/household/memos"),
   });
   const projects = dashboard.data?.household.projects || [];
-  const memos = dashboard.data?.household.memos || [];
-  const calendarDays = Array.from({ length: 30 }, (_, index) => {
-    const date = new Date();
-    date.setHours(12, 0, 0, 0);
-    date.setDate(date.getDate() + index);
-    const key = date.toISOString().slice(0, 10);
-    return {
-      key,
-      day: date.getDate(),
-      weekday: "日一二三四五六"[date.getDay()],
-      memos: memos.filter((memo) => memo.due_date === key),
-    };
-  });
+  const memos = useMemo(() => {
+    const todayAtNoon = new Date(`${today()}T12:00:00`).getTime();
+    return (memoQuery.data || [])
+      .filter((memo) => memo.status === "pending")
+      .map((memo) => {
+        const daysUntil = Math.round(
+          (new Date(`${memo.due_date}T12:00:00`).getTime() - todayAtNoon) /
+            86_400_000,
+        );
+        return {
+          ...memo,
+          days_until: daysUntil,
+          display_status:
+            daysUntil < 0
+              ? "overdue"
+              : daysUntil <= memo.reminder_days
+                ? "upcoming"
+                : "pending",
+        } as FinancialMemo;
+      })
+      .sort((a, b) => a.due_date.localeCompare(b.due_date));
+  }, [memoQuery.data]);
+  const [calendarYear, calendarMonthNumber] = calendarMonth
+    .split("-")
+    .map(Number);
+  const calendarDays = Array.from(
+    { length: new Date(calendarYear, calendarMonthNumber, 0).getDate() },
+    (_, index) => {
+      const day = index + 1;
+      const key = `${calendarMonth}-${String(day).padStart(2, "0")}`;
+      const date = new Date(calendarYear, calendarMonthNumber - 1, day, 12);
+      return {
+        key,
+        day,
+        weekday: "日一二三四五六"[date.getDay()],
+        memos: memos.filter((memo) => memo.due_date === key),
+      };
+    },
+  );
   const refreshPlans = () => {
     client.invalidateQueries({ queryKey: ["dashboard-plans"] });
+    client.invalidateQueries({ queryKey: ["memos"] });
     client.invalidateQueries({ queryKey: ["dashboard"] });
   };
   const completeProject = useMutation({
@@ -1124,14 +1224,22 @@ export function PlansPage({ privateMode }: { privateMode: boolean }) {
       <section className="content-panel reminder-calendar">
         <div className="content-panel-head">
           <div>
-            <h3>未来 30 天日历</h3>
-            <p>按预计日期查看大额收入与支出。</p>
+            <h3>{monthLabel(calendarMonth)}大额事项日历</h3>
+            <p>可切换到任意月份，提前安排大额收入与支出。</p>
           </div>
-          <CalendarDays size={20} />
+          <MonthNavigator
+            month={calendarMonth}
+            onChange={setCalendarMonth}
+            label="计划日历月份"
+          />
         </div>
         <div className="calendar-strip">
           {calendarDays.map((day) => (
-            <div className={day.memos.length ? "has-event" : ""} key={day.key}>
+            <div
+              className={day.memos.length ? "has-event" : ""}
+              style={day.day === 1 ? { gridColumnStart: new Date(calendarYear, calendarMonthNumber - 1, 1, 12).getDay() + 1 } : undefined}
+              key={day.key}
+            >
               <span>周{day.weekday}</span>
               <strong>{day.day}</strong>
               {day.memos.slice(0, 2).map((memo) => (
@@ -1211,7 +1319,7 @@ export function PlansPage({ privateMode }: { privateMode: boolean }) {
           <div className="content-panel-head">
             <div>
               <h3>大额收支备忘</h3>
-              <p>未来 30 天站内提醒</p>
+              <p>显示全部待处理事项，不再限制未来 30 天。</p>
             </div>
             <Bell size={20} />
           </div>
@@ -1264,8 +1372,8 @@ export function PlansPage({ privateMode }: { privateMode: boolean }) {
             {!memos.length && (
               <EmptyState
                 icon={<Clock3 />}
-                title="近期没有大额事项"
-                text="新建备忘后会在到期前提醒。"
+                title="没有待处理的大额事项"
+                text="可先切换计划月份，再新建未来备忘。"
               />
             )}
           </div>
@@ -1275,10 +1383,12 @@ export function PlansPage({ privateMode }: { privateMode: boolean }) {
         <PlanForm
           kind={modal}
           meta={meta.data}
+          initialMonth={calendarMonth}
           onClose={() => setModal(null)}
           onSaved={() => {
             setModal(null);
             client.invalidateQueries({ queryKey: ["dashboard-plans"] });
+            client.invalidateQueries({ queryKey: ["memos"] });
             client.invalidateQueries({ queryKey: ["dashboard"] });
           }}
         />
@@ -1290,14 +1400,18 @@ export function PlansPage({ privateMode }: { privateMode: boolean }) {
 function PlanForm({
   kind,
   meta,
+  initialMonth,
   onClose,
   onSaved,
 }: {
   kind: "project" | "memo";
   meta: MetaData;
+  initialMonth: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
+  const initialDate =
+    initialMonth === currentMonth() ? today() : `${initialMonth}-01`;
   const [memoKind, setMemoKind] = useState<"income" | "expense">("expense");
   const mutation = useMutation({
     mutationFn: (body: unknown) =>
@@ -1371,7 +1485,7 @@ function PlanForm({
           <>
             <label>
               <span>开始日期</span>
-              <input name="start_date" type="date" defaultValue={today()} />
+              <input name="start_date" type="date" defaultValue={initialDate} />
             </label>
             <label>
               <span>结束日期</span>
@@ -1395,7 +1509,7 @@ function PlanForm({
             </label>
             <label>
               <span>预计日期</span>
-              <input name="due_date" type="date" required />
+              <input name="due_date" type="date" defaultValue={initialDate} required />
             </label>
             <label>
               <span>分类</span>
