@@ -856,6 +856,21 @@ function HouseholdPlanSection({
           <span>计划结束预计剩余</span><strong>{money(plan.totals.projectedClosingBalanceCny, privateMode)}</strong>
         </div>
       </div>
+      {plan.livingExpenseBasis && (
+        <div className="living-expense-basis">
+          <div>
+            <span>生活费正式口径</span>
+            <strong>{money(plan.livingExpenseBasis.monthlyAmountCny, privateMode)} / 月</strong>
+          </div>
+          <p>
+            以人民币预算为准；按当前规划汇率 {plan.settings.planningRateToCny} 折算，约为{" "}
+            {plan.livingExpenseBasis.openingCurrencyCode}{" "}
+            {privateMode ? "••••" : plan.livingExpenseBasis.monthlyAmountInOpeningCurrency.toFixed(2)} / 月。
+            规划期内共 {plan.livingExpenseBasis.plannedMonths} 个月，金额来自“
+            {plan.livingExpenseBasis.categoryName}”月度预算。
+          </p>
+        </div>
+      )}
       {plan.totals.firstNegativeMonth && (
         <div className="plan-warning"><AlertCircle size={16} />预计在 {monthLabel(plan.totals.firstNegativeMonth)} 出现资金缺口</div>
       )}

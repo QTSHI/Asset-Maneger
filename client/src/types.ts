@@ -87,6 +87,16 @@ export interface HouseholdPlan {
     startMonth: string;
     endMonth: string;
   };
+  livingExpenseBasis: {
+    categoryId: number;
+    categoryName: string;
+    basisCurrencyCode: "CNY";
+    monthlyAmountCny: number;
+    monthlyAmountInOpeningCurrency: number;
+    openingCurrencyCode: string;
+    plannedMonths: number;
+    source: "monthly_budget";
+  } | null;
   totals: {
     openingBalanceCny: number;
     plannedIncomeCny: number;

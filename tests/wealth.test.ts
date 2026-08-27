@@ -79,7 +79,7 @@ describe('Stone Wealth data model', () => {
 
   it('builds a cross-month household cash plan from budgets and large memos', () => {
     const cny = db.prepare("SELECT id FROM currencies WHERE code='CNY'").get().id;
-    const category = db.prepare("SELECT id FROM household_categories WHERE kind='expense' LIMIT 1").get().id;
+    const category = db.prepare("SELECT id FROM household_categories WHERE name='家庭生活费'").get().id;
     db.prepare(`
       UPDATE household_plan_settings
       SET opening_amount = 10000, opening_currency_id = ?, planning_rate_to_cny = 1,
@@ -95,6 +95,10 @@ describe('Stone Wealth data model', () => {
     const plan = wealth.getHouseholdPlan();
     expect(plan.totals).toMatchObject({ openingBalanceCny: 10000, plannedExpenseCny: 1000, memoExpenseCny: 500, projectedClosingBalanceCny: 8500 });
     expect(plan.months.map((row: any) => row.closingBalanceCny)).toEqual([9000, 8500]);
+    expect(plan.livingExpenseBasis).toMatchObject({
+      categoryName: '家庭生活费', monthlyAmountCny: 1000,
+      monthlyAmountInOpeningCurrency: 1000, plannedMonths: 1, source: 'monthly_budget',
+    });
 
     db.prepare('DELETE FROM financial_memos WHERE id = ?').run(Number(memo.lastInsertRowid));
     db.prepare("DELETE FROM monthly_budgets WHERE month IN ('2032-01', '2032-02')").run();

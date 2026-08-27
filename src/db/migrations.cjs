@@ -233,6 +233,7 @@ function applyStoneWealthSchema(db) {
     ['住房', 'expense', '#496a8f', 'house', 10],
     ['餐饮', 'expense', '#d97706', 'utensils', 20],
     ['交通', 'expense', '#2563eb', 'car', 30],
+    ['家庭生活费', 'expense', '#0f766e', 'wallet', 35],
     ['日用', 'expense', '#7c3aed', 'shopping-bag', 40],
     ['教育', 'expense', '#0891b2', 'book-open', 50],
     ['医疗', 'expense', '#dc2626', 'heart-pulse', 60],

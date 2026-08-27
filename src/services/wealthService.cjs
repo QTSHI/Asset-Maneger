@@ -343,6 +343,21 @@ function getHouseholdPlan() {
     GROUP BY mb.month
   `).all(settings.start_month, settings.end_month).map((row) => [row.month, row]));
 
+  const livingExpense = db.prepare(`
+    SELECT hc.id AS category_id, hc.name AS category_name,
+           mb.planned_amount_cny AS monthly_amount_cny,
+           COUNT(*) AS planned_months
+    FROM monthly_budgets mb
+    JOIN household_categories hc ON hc.id = mb.category_id
+    WHERE hc.archived_at IS NULL AND hc.kind = 'expense'
+      AND hc.name = '家庭生活费'
+      AND mb.month BETWEEN ? AND ?
+      AND mb.planned_amount_cny > 0
+    GROUP BY hc.id, mb.planned_amount_cny
+    ORDER BY COUNT(*) DESC, mb.planned_amount_cny DESC
+    LIMIT 1
+  `).get(settings.start_month, settings.end_month);
+
   const actuals = new Map(db.prepare(`
     SELECT substr(occurred_on, 1, 7) AS month,
            SUM(CASE WHEN kind = 'income' THEN amount_cny ELSE 0 END) AS actual_income,
@@ -407,6 +422,18 @@ function getHouseholdPlan() {
       startMonth: settings.start_month,
       endMonth: settings.end_month
     },
+    livingExpenseBasis: livingExpense ? {
+      categoryId: livingExpense.category_id,
+      categoryName: livingExpense.category_name,
+      basisCurrencyCode: 'CNY',
+      monthlyAmountCny: money(livingExpense.monthly_amount_cny),
+      monthlyAmountInOpeningCurrency: money(
+        new Decimal(livingExpense.monthly_amount_cny).div(settings.planning_rate_to_cny)
+      ),
+      openingCurrencyCode: settings.opening_currency_code,
+      plannedMonths: livingExpense.planned_months,
+      source: 'monthly_budget'
+    } : null,
     totals: {
       openingBalanceCny: money(new Decimal(settings.opening_amount).times(settings.planning_rate_to_cny)),
       plannedIncomeCny: sum('plannedIncomeCny'),
