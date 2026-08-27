@@ -61,8 +61,13 @@ describe('asset classification', () => {
 
 describe('Stone Wealth data model', () => {
   it('applies migrations and seeds household categories', () => {
-    expect(db.prepare('SELECT COUNT(*) count FROM schema_migrations').get().count).toBeGreaterThanOrEqual(2);
+    expect(db.prepare('SELECT COUNT(*) count FROM schema_migrations').get().count).toBeGreaterThanOrEqual(3);
     expect(db.prepare('SELECT COUNT(*) count FROM household_categories').get().count).toBeGreaterThan(5);
+    const columns = db.prepare('PRAGMA table_info(assets)').all().map((row: any) => row.name);
+    expect(columns).toEqual(expect.arrayContaining([
+      'quote_code', 'quantity_status', 'valuation_mode', 'imported_market_value',
+      'imported_cost_value', 'valuation_as_of',
+    ]));
   });
 
   it('uses Europe/London for daily snapshot boundaries', () => {
@@ -107,6 +112,28 @@ describe('Stone Wealth data model', () => {
 
     db.prepare('DELETE FROM assets WHERE id = ?').run(Number(asset.lastInsertRowid));
     db.prepare("DELETE FROM quote_cache WHERE cache_key = 'TEST-FUND_fund'").run();
+  });
+
+  it('preserves a legacy imported position value until quantity-based valuation is enabled', () => {
+    const cny = db.prepare("SELECT id FROM currencies WHERE code='CNY'").get().id;
+    const fundType = db.prepare("SELECT id FROM asset_types WHERE name='fund'").get().id;
+    const account = db.prepare("SELECT id FROM platforms WHERE name='Test Bank'").get().id;
+    const asset = db.prepare(`
+      INSERT INTO assets (
+        code, name, shares, cost_price, asset_type_id, platform_id, currency_id,
+        external_source, valuation_mode, quantity_status, imported_market_value, imported_cost_value
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'manual_import', 'position_value', 'estimated', 125, 100)
+    `).run('LEGACY-POSITION', 'Legacy Position', 50, 2, fundType, account, cny);
+    db.prepare(`
+      INSERT INTO quote_cache (cache_key, code, asset_type, price, currency_code, source, status)
+      VALUES ('LEGACY-POSITION_fund', 'LEGACY-POSITION', 'fund', 125, 'CNY', 'manual-import', 'fresh')
+    `).run();
+
+    const valued = wealth.valueAssets().find((row: any) => row.id === Number(asset.lastInsertRowid));
+    expect(valued).toMatchObject({ marketValueCny: 125, costValueCny: 100, quantityStatus: 'estimated', valuationMode: 'position_value' });
+
+    db.prepare('DELETE FROM assets WHERE id = ?').run(Number(asset.lastInsertRowid));
+    db.prepare("DELETE FROM quote_cache WHERE cache_key = 'LEGACY-POSITION_fund'").run();
   });
 
   it('deletes a household transaction through the API and removes it from the month list', async () => {

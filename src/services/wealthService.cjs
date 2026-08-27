@@ -80,8 +80,13 @@ function valueAssets() {
       : Number(asset.cached_price ?? asset.cost_price ?? 0);
     const classCode = isAggregateT212 ? 'unclassified' : (asset.asset_class_code || 'unclassified');
     const subtypeCode = isAggregateT212 ? 'unclassified' : (asset.asset_subtype_code || 'unclassified');
-    const marketOriginal = new Decimal(asset.shares || 0).times(currentPrice || 0);
-    const costOriginal = new Decimal(asset.shares || 0).times(asset.cost_price || 0);
+    const usesImportedPosition = asset.valuation_mode === 'position_value';
+    const marketOriginal = usesImportedPosition
+      ? new Decimal(asset.imported_market_value ?? 0)
+      : new Decimal(asset.shares || 0).times(currentPrice || 0);
+    const costOriginal = usesImportedPosition
+      ? new Decimal(asset.imported_cost_value ?? 0)
+      : new Decimal(asset.shares || 0).times(asset.cost_price || 0);
     const marketCny = marketOriginal.times(rate);
     const costCny = costOriginal.times(rate);
     const profitCny = marketCny.minus(costCny);
@@ -94,6 +99,12 @@ function valueAssets() {
       shares: precise(asset.shares),
       costPrice: precise(asset.cost_price),
       currentPrice: precise(currentPrice),
+      quoteCode: asset.quote_code || null,
+      quantityStatus: asset.quantity_status || 'verified',
+      valuationMode: asset.valuation_mode || 'units',
+      importedMarketValue: asset.imported_market_value == null ? null : money(asset.imported_market_value),
+      importedCostValue: asset.imported_cost_value == null ? null : money(asset.imported_cost_value),
+      valuationAsOf: asset.valuation_as_of || null,
       currency,
       rateToCny: precise(rate),
       marketValue: money(marketOriginal),

@@ -83,7 +83,13 @@ const assetCreateSchema = z.object({
   name: z.string().trim().max(120).optional().default(''),
   shares: z.coerce.number().finite(),
   cost_price: z.coerce.number().nonnegative().nullable().optional().default(0),
-  currency_id: idSchema
+  currency_id: idSchema,
+  quote_code: z.string().trim().max(40).nullable().optional(),
+  quantity_status: z.enum(['missing', 'estimated', 'verified']).optional().default('verified'),
+  valuation_mode: z.enum(['units', 'position_value']).optional().default('units'),
+  imported_market_value: z.coerce.number().nonnegative().nullable().optional(),
+  imported_cost_value: z.coerce.number().nonnegative().nullable().optional(),
+  valuation_as_of: dateString.nullable().optional()
 });
 const assetPatchSchema = assetCreateSchema.partial();
 
@@ -108,9 +114,17 @@ router.post('/assets', handler(async (req, res) => {
   const input = parse(assetCreateSchema, req.body);
   const user = username(req);
   const result = db.prepare(`
-    INSERT INTO assets (platform_id, asset_type_id, code, name, shares, cost_price, currency_id, created_by, updated_by)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(input.platform_id, input.asset_type_id, input.code, input.name, input.shares, input.cost_price, input.currency_id, user, user);
+    INSERT INTO assets (
+      platform_id, asset_type_id, code, name, shares, cost_price, currency_id,
+      quote_code, quantity_status, valuation_mode, imported_market_value,
+      imported_cost_value, valuation_as_of, created_by, updated_by
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    input.platform_id, input.asset_type_id, input.code, input.name, input.shares,
+    input.cost_price, input.currency_id, input.quote_code || null,
+    input.quantity_status, input.valuation_mode, input.imported_market_value ?? null,
+    input.imported_cost_value ?? null, input.valuation_as_of || null, user, user
+  );
   const id = Number(result.lastInsertRowid);
   const record = getRecord('assets', id);
   audit('asset', id, 'create', user, null, record);
@@ -124,7 +138,11 @@ router.patch('/assets/:id', handler(async (req, res) => {
   const before = getRecord('assets', id);
   if (!before || before.archived_at) return fail(res, 404, 'NOT_FOUND', '资产不存在');
   const user = username(req);
-  updateRecord('assets', id, input, ['platform_id', 'asset_type_id', 'code', 'name', 'shares', 'cost_price', 'currency_id', 'updated_by', 'updated_at'], user);
+  updateRecord('assets', id, input, [
+    'platform_id', 'asset_type_id', 'code', 'name', 'shares', 'cost_price', 'currency_id',
+    'quote_code', 'quantity_status', 'valuation_mode', 'imported_market_value',
+    'imported_cost_value', 'valuation_as_of', 'updated_by', 'updated_at'
+  ], user);
   const after = getRecord('assets', id);
   audit('asset', id, 'update', user, before, after);
   ok(res, after);

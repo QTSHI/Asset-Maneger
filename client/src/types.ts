@@ -20,6 +20,12 @@ export interface ValuedAsset {
   shares: number;
   costPrice: number;
   currentPrice: number;
+  quoteCode?: string | null;
+  quantityStatus: "missing" | "estimated" | "verified";
+  valuationMode: "units" | "position_value";
+  importedMarketValue?: number | null;
+  importedCostValue?: number | null;
+  valuationAsOf?: string | null;
   currency: string;
   marketValueCny: number;
   costValueCny: number;

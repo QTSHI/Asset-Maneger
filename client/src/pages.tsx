@@ -456,17 +456,35 @@ function AssetForm({
       asset_type_id: Number(form.get("asset_type_id")),
       currency_id: Number(form.get("currency_id")),
       code: form.get("code"),
+      quote_code: form.get("quote_code") || null,
       name: form.get("name"),
       shares: Number(form.get("shares")),
       cost_price: Number(form.get("cost_price")),
+      quantity_status: form.get("quantity_status"),
+      valuation_mode: form.get("valuation_mode"),
+      imported_market_value: form.get("imported_market_value")
+        ? Number(form.get("imported_market_value"))
+        : null,
+      imported_cost_value: form.get("imported_cost_value")
+        ? Number(form.get("imported_cost_value"))
+        : null,
+      valuation_as_of: form.get("valuation_as_of") || null,
     });
   };
   return (
     <Modal title={asset ? "编辑资产" : "添加资产"} onClose={onClose}>
       <form className="form-grid" onSubmit={submit}>
         <label>
-          <span>资产代码</span>
+          <span>内部资产编号</span>
           <input name="code" defaultValue={asset?.code} required />
+        </label>
+        <label>
+          <span>行情代码</span>
+          <input
+            name="quote_code"
+            defaultValue={asset?.quoteCode || ""}
+            placeholder="例如 000218 或 000029"
+          />
         </label>
         <label>
           <span>名称</span>
@@ -507,6 +525,21 @@ function AssetForm({
           />
         </label>
         <label>
+          <span>份额可信度</span>
+          <select name="quantity_status" defaultValue={asset?.quantityStatus || "verified"}>
+            <option value="verified">已确认</option>
+            <option value="estimated">根据历史估值推算</option>
+            <option value="missing">尚未提供</option>
+          </select>
+        </label>
+        <label>
+          <span>估值方式</span>
+          <select name="valuation_mode" defaultValue={asset?.valuationMode || "units"}>
+            <option value="units">单位价格 × 份额</option>
+            <option value="position_value">沿用导入持仓金额</option>
+          </select>
+        </label>
+        <label>
           <span>成本价</span>
           <input
             name="cost_price"
@@ -516,6 +549,30 @@ function AssetForm({
             defaultValue={asset?.costPrice}
             required
           />
+        </label>
+        <label>
+          <span>导入持仓市值</span>
+          <input
+            name="imported_market_value"
+            type="number"
+            min="0"
+            step="any"
+            defaultValue={asset?.importedMarketValue ?? ""}
+          />
+        </label>
+        <label>
+          <span>导入持仓成本</span>
+          <input
+            name="imported_cost_value"
+            type="number"
+            min="0"
+            step="any"
+            defaultValue={asset?.importedCostValue ?? ""}
+          />
+        </label>
+        <label>
+          <span>估值日期</span>
+          <input name="valuation_as_of" type="date" defaultValue={asset?.valuationAsOf || ""} />
         </label>
         <label className="span-2">
           <span>币种</span>

@@ -297,6 +297,39 @@ const migrations = [
         VALUES ('unclassified', 'unclassified', 'unclassified')
       `).run();
     }
+  },
+  {
+    version: '003_asset_instrument_identity',
+    run(db) {
+      ensureColumn(db, 'assets', 'quote_code TEXT');
+      ensureColumn(db, 'assets', "quantity_status TEXT NOT NULL DEFAULT 'verified'");
+      ensureColumn(db, 'assets', "valuation_mode TEXT NOT NULL DEFAULT 'units'");
+      ensureColumn(db, 'assets', 'imported_market_value REAL');
+      ensureColumn(db, 'assets', 'imported_cost_value REAL');
+      ensureColumn(db, 'assets', 'valuation_as_of TEXT');
+
+      // Legacy spreadsheet imports stored a whole position as one synthetic unit.
+      // Preserve that value explicitly until a real or estimated quantity is supplied.
+      db.exec(`
+        UPDATE assets
+        SET valuation_mode = 'position_value',
+            quantity_status = 'missing',
+            imported_market_value = COALESCE(
+              imported_market_value,
+              (SELECT q.price
+               FROM quote_cache q
+               JOIN asset_types at ON at.id = assets.asset_type_id
+               WHERE q.cache_key = assets.code || '_' || at.name),
+              shares * COALESCE(cost_price, 0)
+            ),
+            imported_cost_value = COALESCE(imported_cost_value, shares * COALESCE(cost_price, 0)),
+            valuation_as_of = COALESCE(valuation_as_of, date(created_at))
+        WHERE external_source = 'manual_import'
+          AND asset_type_id IN (
+            SELECT id FROM asset_types WHERE asset_class_code IN ('fund', 'stock', 'alternative')
+          );
+      `);
+    }
   }
 ];
 
