@@ -703,6 +703,23 @@ export function BudgetPage({ privateMode }: { privateMode: boolean }) {
           </div>
         </div>
       )}
+      {data && data.totals.plannedExpense === 0 && data.navigation.nextPlannedMonth && (
+        <div className="next-plan-notice">
+          <div>
+            <CalendarDays size={18} />
+            <span>
+              {monthLabel(month)}没有设置预算，最近的计划从
+              <strong>{monthLabel(data.navigation.nextPlannedMonth)}</strong>开始。
+            </span>
+          </div>
+          <button
+            className="secondary-button"
+            onClick={() => setMonth(data.navigation.nextPlannedMonth!)}
+          >
+            查看下一计划月 <ChevronRight size={15} />
+          </button>
+        </div>
+      )}
       {meta.data && <HouseholdPlanSection meta={meta.data} privateMode={privateMode} />}
       <section className="content-panel">
         <div className="content-panel-head">

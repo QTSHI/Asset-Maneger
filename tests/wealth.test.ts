@@ -87,6 +87,7 @@ describe('Stone Wealth data model', () => {
       WHERE id = 1
     `).run(cny);
     db.prepare(`INSERT INTO monthly_budgets (month, category_id, planned_amount_cny) VALUES ('2032-01', ?, 1000)`).run(category);
+    expect(wealth.getHouseholdSummary('2031-12').navigation).toMatchObject({ nextPlannedMonth: '2032-01' });
     const memo = db.prepare(`
       INSERT INTO financial_memos (kind, title, expected_amount, currency_id, due_date, status)
       VALUES ('expense', 'Plan test memo', 500, ?, '2032-02-10', 'pending')

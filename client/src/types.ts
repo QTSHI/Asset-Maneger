@@ -62,6 +62,10 @@ export interface HouseholdSummary {
     plannedExpense: number;
     remainingBudget: number;
   };
+  navigation: {
+    previousPlannedMonth: string | null;
+    nextPlannedMonth: string | null;
+  };
   budgets: Array<{
     id: number;
     categoryId: number;

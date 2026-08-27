@@ -258,6 +258,15 @@ function getHouseholdSummary(monthInput) {
   const expense = transactions.filter((item) => item.kind === 'expense').reduce((sum, item) => sum.plus(item.amount_cny), new Decimal(0));
   const plannedExpense = budgets.filter((item) => item.kind === 'expense').reduce((sum, item) => sum.plus(item.planned), new Decimal(0));
 
+  const plannedMonthNavigation = db.prepare(`
+    SELECT
+      MAX(CASE WHEN mb.month < ? THEN mb.month END) AS previous_planned_month,
+      MIN(CASE WHEN mb.month > ? THEN mb.month END) AS next_planned_month
+    FROM monthly_budgets mb
+    JOIN household_categories hc ON hc.id = mb.category_id
+    WHERE hc.archived_at IS NULL AND mb.planned_amount_cny > 0
+  `).get(month, month);
+
   const projects = db.prepare(`
     SELECT hp.*, COALESCE(SUM(CASE WHEN ht.kind = 'expense' AND ht.archived_at IS NULL THEN ht.amount_cny ELSE 0 END), 0) AS spent_cny
     FROM household_projects hp
@@ -303,6 +312,10 @@ function getHouseholdSummary(monthInput) {
       net: money(income.minus(expense)),
       plannedExpense: money(plannedExpense),
       remainingBudget: money(plannedExpense.minus(expense))
+    },
+    navigation: {
+      previousPlannedMonth: plannedMonthNavigation.previous_planned_month || null,
+      nextPlannedMonth: plannedMonthNavigation.next_planned_month || null
     },
     budgets,
     recentTransactions: transactions.slice(0, 6),
