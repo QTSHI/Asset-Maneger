@@ -141,8 +141,8 @@ describe('Stone Wealth data model', () => {
     const asset = db.prepare(`
       INSERT INTO assets (
         code, name, shares, cost_price, asset_type_id, platform_id, currency_id,
-        external_source, valuation_mode, quantity_status, imported_market_value, imported_cost_value
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'manual_import', 'position_value', 'estimated', 125, 100)
+        external_source, quote_code, valuation_mode, quantity_status, imported_market_value, imported_cost_value
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, 'manual_import', '001234', 'position_value', 'estimated', 125, 100)
     `).run('LEGACY-POSITION', 'Legacy Position', 50, 2, fundType, account, cny);
     db.prepare(`
       INSERT INTO quote_cache (cache_key, code, asset_type, price, currency_code, source, status)
@@ -157,6 +157,12 @@ describe('Stone Wealth data model', () => {
       quantityStatus: 'estimated',
       valuationMode: 'position_value',
       valuationBasis: 'imported_position',
+      quote: { status: 'static' },
+      dataQuality: {
+        status: 'attention',
+        label: '静态持仓估值',
+        issues: expect.arrayContaining(['estimated_quantity', 'static_valuation']),
+      },
     });
 
     db.prepare('DELETE FROM assets WHERE id = ?').run(Number(asset.lastInsertRowid));

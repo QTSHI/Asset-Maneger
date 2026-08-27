@@ -46,6 +46,11 @@ export interface ValuedAsset {
     source?: string | null;
     error?: string | null;
   };
+  dataQuality: {
+    status: "ready" | "attention" | "blocked";
+    label: string;
+    issues: string[];
+  };
 }
 
 export interface HouseholdSummary {

@@ -262,9 +262,9 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
           </strong>
         </div>
         <div>
-          <span>行情需关注</span>
+          <span>数据需关注</span>
           <strong>
-            {filtered.filter((x) => x.quote.status !== "fresh").length}
+            {filtered.filter((x) => x.dataQuality.status !== "ready").length}
           </strong>
         </div>
       </div>
@@ -373,6 +373,11 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
                     <td data-label="资产">
                       <strong>{asset.name}</strong>
                       <small>{asset.code} · {asset.currency}</small>
+                      {asset.dataQuality.status !== "ready" && (
+                        <span className={`quality-tag ${asset.dataQuality.status}`}>
+                          {asset.dataQuality.label}
+                        </span>
+                      )}
                     </td>
                     <td data-label="账户">{asset.accountName}</td>
                     <td data-label="类型"><span className="tag">{asset.subtypeLabel}</span></td>
@@ -395,7 +400,13 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
                     </td>
                     <td data-label="行情">
                       <span className={`status ${asset.quote.status}`}>
-                        {asset.quote.status === "fresh" ? "已更新" : asset.quote.status === "missing" ? "待更新" : "已过期"}
+                        {{
+                          fresh: "已更新",
+                          static: "静态导入",
+                          missing: "待更新",
+                          stale: "已过期",
+                          error: "更新失败",
+                        }[asset.quote.status] || "待确认"}
                       </span>
                     </td>
                     <td data-label="操作">

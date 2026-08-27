@@ -103,6 +103,12 @@ function valueAssets() {
     const profitCny = marketCny.minus(costCny);
     const profitPercent = costCny.gt(0) ? profitCny.div(costCny).times(100) : new Decimal(0);
 
+    const rawQuoteStatus = isCash ? 'fresh' : (asset.quote_status || 'missing');
+    const quoteStatus = usesImportedPosition && asset.live_price == null && asset.quote_source === 'manual-import'
+      ? 'static'
+      : rawQuoteStatus;
+    const dataQuality = getAssetDataQuality(asset, quoteStatus, usesImportedPosition);
+
     return {
       id: asset.id,
       code: asset.code,
@@ -135,13 +141,38 @@ function valueAssets() {
       subtypeCode,
       subtypeLabel: SUBTYPE_LABELS[subtypeCode] || SUBTYPE_LABELS.unclassified,
       quote: {
-        status: isCash ? 'fresh' : (asset.quote_status || 'missing'),
+        status: quoteStatus,
         fetchedAt: asset.quote_fetched_at,
         source: asset.quote_source,
         error: asset.quote_error
-      }
+      },
+      dataQuality
     };
   });
+}
+
+function getAssetDataQuality(asset, quoteStatus, usesImportedPosition = asset.valuation_mode === 'position_value') {
+  const issues = [];
+  const investmentClass = ['fund', 'stock', 'alternative'].includes(asset.asset_class_code);
+  if (asset.external_source === 'manual_import' && ['fund', 'stock'].includes(asset.asset_class_code) && !asset.quote_code) {
+    issues.push('missing_quote_code');
+  }
+  if (investmentClass && asset.quantity_status === 'missing') issues.push('missing_quantity');
+  if (investmentClass && asset.quantity_status === 'estimated') issues.push('estimated_quantity');
+  if (usesImportedPosition) issues.push('static_valuation');
+  if (['missing', 'error'].includes(quoteStatus)) issues.push('missing_quote');
+  if (quoteStatus === 'stale') issues.push('stale_quote');
+
+  const blocked = issues.some((issue) => ['missing_quote_code', 'missing_quantity', 'missing_quote'].includes(issue));
+  const status = blocked ? 'blocked' : issues.length ? 'attention' : 'ready';
+  let label = '数据完整';
+  if (issues.includes('missing_quote_code')) label = '缺少行情代码';
+  else if (issues.includes('missing_quantity')) label = '缺少持仓份额';
+  else if (issues.includes('static_valuation')) label = '静态持仓估值';
+  else if (issues.includes('stale_quote')) label = '行情已过期';
+  else if (issues.includes('estimated_quantity')) label = '份额为估算值';
+  else if (issues.includes('missing_quote')) label = '行情待更新';
+  return { status, label, issues };
 }
 
 function allocation(items, key, labelKey) {
@@ -306,7 +337,7 @@ function getDashboard({ month, range } = {}) {
     color: CLASS_META[entry.code]?.color || CLASS_META.unclassified.color
   }));
   const accountAllocation = allocation(assets, 'accountId', 'accountName');
-  const staleCount = assets.filter((asset) => ['stale', 'error', 'missing'].includes(asset.quote.status)).length;
+  const staleCount = assets.filter((asset) => ['static', 'stale', 'error', 'missing'].includes(asset.quote.status)).length;
 
   return {
     asOf: new Date().toISOString(),
@@ -475,5 +506,6 @@ module.exports = {
   getStoredRates,
   londonDate,
   quoteCodeForAsset,
-  isMarketRefreshCandidate
+  isMarketRefreshCandidate,
+  getAssetDataQuality
 };
