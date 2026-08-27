@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="theme-color" content="#667eea">
+    <title>资产追踪器</title>
+    <link rel="manifest" href="/manifest.json">
+    <link rel="stylesheet" href="/css/style.css">
+</head>
+<body>
+    <!-- 提示 -->
+    <div class="hint loading-hint" id="loadingHint">⏳ 加载中...</div>
+    <div class="hint success-hint" id="successHint">✅ 已更新</div>
+    <div class="hint error-hint" id="errorHint">⚠️ 加载失败</div>
+    
+    <!-- 登录页 -->
+    <div class="login-page" id="loginPage" style="display:none;">
+        <div class="login-box">
+            <h1>🪨 资产追踪器</h1>
+            <input type="text" id="username" placeholder="用户名">
+            <input type="password" id="password" placeholder="密码">
+            <button id="loginBtn" onclick="ssoLogin()">登录</button>
+            <div id="errorMsg" style="color:#dc3545;margin-top:12px;font-size:14px;"></div>
+        </div>
+    </div>
+    
+    <!-- 仪表盘 -->
+    <div class="dashboard" id="dashboard" style="display:none;">
+        <div class="header">
+            <div>
+                <h1>资产追踪器</h1>
+                <div class="update-time" id="updateTime">-</div>
+            </div>
+            <div>
+                <button class="refresh-btn" onclick="handleRefresh()">刷新</button>
+                <button class="add-btn" onclick="openAddModal()">+ 添加</button>
+            </div>
+        </div>
+        
+        <div class="top-section">
+            <div class="total-card">
+                <h3>💰 总资产（人民币计价）</h3>
+                <div class="amount" id="totalAmount">¥0.00</div>
+                <div class="rates" id="exchangeRates"></div>
+            </div>
+            <div class="chart-card">
+                <div class="chart-empty">
+                    <div class="icon">📈</div>
+                    <div>数据采集中...</div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="currency-sections" id="currencySections"></div>
+        
+        <div class="assets-page" id="assetsPage">
+            <button class="back-btn" onclick="UI.goBack()">← 返回</button>
+            <h2 id="pageTitle"></h2>
+            <div id="assetsTable"></div>
+        </div>
+    </div>
+    
+    <!-- 资产模态框 -->
+    <div class="modal" id="assetModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="modalTitle">添加资产</h3>
+                <button class="modal-close" onclick="closeModal()">&times;</button>
+            </div>
+            <form id="assetForm">
+                <input type="hidden" id="assetId">
+                <div class="form-group">
+                    <label>代码 *</label>
+                    <input type="text" id="assetCode" required placeholder="如: 000001, CASH-CNY">
+                </div>
+                <div class="form-group">
+                    <label>名称</label>
+                    <input type="text" id="assetName" placeholder="如: 平安银行">
+                </div>
+                <div class="form-group">
+                    <label>数量/余额 *</label>
+                    <input type="number" id="assetShares" required step="0.01" placeholder="1000">
+                </div>
+                <div class="form-group">
+                    <label>成本价</label>
+                    <input type="number" id="assetCostPrice" step="0.0001" placeholder="1.5000">
+                </div>
+                <div class="form-group" id="platformGroup">
+                    <label>平台 *</label>
+                    <select id="assetPlatform" required></select>
+                </div>
+                <div class="form-group">
+                    <label>货币 *</label>
+                    <select id="assetCurrency" required></select>
+                </div>
+                <div class="form-group">
+                    <label>资产类型</label>
+                    <select id="assetType"></select>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" onclick="closeModal()">取消</button>
+                    <button type="submit" class="btn-primary">保存</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- 平台模态框 -->
+    <div class="modal" id="platformModal">
+        <div class="modal-content" style="max-width: 400px;">
+            <div class="modal-header">
+                <h3>添加平台</h3>
+                <button class="modal-close" onclick="closePlatformModal()">&times;</button>
+            </div>
+            <form id="platformForm">
+                <div class="form-group">
+                    <label>平台名称 *</label>
+                    <input type="text" id="platformName" required placeholder="如: 华泰证券">
+                </div>
+                <div class="form-group">
+                    <label>默认货币 *</label>
+                    <select id="platformCurrency" required></select>
+                </div>
+                <div class="form-actions">
+                    <button type="button" class="btn-secondary" onclick="closePlatformModal()">取消</button>
+                    <button type="submit" class="btn-primary">添加</button>
+                </div>
+            </form>
+        </div>
+    </div>
+    
+    <!-- 脚本 -->
+    <script src="/js/api.js"></script>
+    <script src="/js/ui.js"></script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
