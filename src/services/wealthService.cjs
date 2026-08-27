@@ -56,13 +56,19 @@ function getActiveAssets() {
            c.code AS currency_code, at.name AS asset_type_name,
            COALESCE(at.asset_class_code, 'unclassified') AS asset_class_code,
            COALESCE(at.asset_subtype_code, 'unclassified') AS asset_subtype_code,
-           q.price AS cached_price, q.status AS quote_status, q.fetched_at AS quote_fetched_at,
-           q.source AS quote_source, q.error_message AS quote_error
+           COALESCE(live_q.price, imported_q.price) AS cached_price,
+           COALESCE(live_q.status, imported_q.status) AS quote_status,
+           COALESCE(live_q.fetched_at, imported_q.fetched_at) AS quote_fetched_at,
+           COALESCE(live_q.source, imported_q.source) AS quote_source,
+           COALESCE(live_q.error_message, imported_q.error_message) AS quote_error
     FROM assets a
     JOIN platforms p ON p.id = a.platform_id
     JOIN asset_types at ON at.id = a.asset_type_id
     LEFT JOIN currencies c ON c.id = a.currency_id
-    LEFT JOIN quote_cache q ON q.cache_key = a.code || '_' || at.name
+    LEFT JOIN quote_cache live_q
+      ON live_q.cache_key = COALESCE(NULLIF(a.quote_code, ''), a.code) || '_' || at.name
+    LEFT JOIN quote_cache imported_q
+      ON imported_q.cache_key = a.code || '_' || at.name
     WHERE a.archived_at IS NULL AND p.archived_at IS NULL
     ORDER BY a.id DESC
   `).all();
@@ -375,10 +381,7 @@ async function refreshMarket() {
     for (const [currency, rate] of rateRows) if (rate) upsertRate.run(currency, rate);
 
     const assets = getActiveAssets();
-    // Manually imported valuations are point-in-time totals rather than unit
-    // prices. Keep their imported quotes stable; external integrations such as
-    // Trading212 continue to refresh through their own synchronization service.
-    const refreshableAssets = assets.filter((asset) => asset.external_source !== 'manual_import');
+    const refreshableAssets = assets.filter(isMarketRefreshCandidate);
     const upsertQuote = db.prepare(`
       INSERT INTO quote_cache (cache_key, code, asset_type, price, currency_code, source, status, error_message, fetched_at)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
@@ -394,14 +397,14 @@ async function refreshMarket() {
     for (let index = 0; index < refreshableAssets.length; index += 5) {
       const batch = refreshableAssets.slice(index, index + 5);
       const results = await Promise.all(batch.map(async (asset) => {
-        const price = await getPrice({ code: asset.code, type: asset.asset_type_name });
+        const price = await getPrice({ code: quoteCodeForAsset(asset), type: asset.asset_type_name });
         return { asset, price };
       }));
       for (const { asset, price } of results) {
         const success = Number(price) > 0;
         upsertQuote.run(
-          `${asset.code}_${asset.asset_type_name}`,
-          asset.code,
+          `${quoteCodeForAsset(asset)}_${asset.asset_type_name}`,
+          quoteCodeForAsset(asset),
           asset.asset_type_name,
           success ? Number(price) : null,
           asset.currency_code || 'CNY',
@@ -409,7 +412,20 @@ async function refreshMarket() {
           success ? 'fresh' : (asset.cached_price ? 'stale' : 'missing'),
           success ? null : '暂时无法获取行情'
         );
-        if (success) marketStatus.updated += 1;
+        if (success) {
+          marketStatus.updated += 1;
+          if (
+            asset.external_source === 'manual_import' &&
+            asset.quantity_status !== 'missing' &&
+            asset.valuation_mode === 'position_value'
+          ) {
+            db.prepare(`
+              UPDATE assets
+              SET valuation_mode = 'units', updated_at = CURRENT_TIMESTAMP
+              WHERE id = ?
+            `).run(asset.id);
+          }
+        }
         else marketStatus.failed += 1;
       }
     }
@@ -421,6 +437,18 @@ async function refreshMarket() {
   }
   marketStatus.finishedAt = new Date().toISOString();
   return marketStatus;
+}
+
+function quoteCodeForAsset(asset) {
+  return String(asset.quote_code || asset.code || '').trim();
+}
+
+function isMarketRefreshCandidate(asset) {
+  if (asset.external_source === 'trading212') return false;
+  if (asset.external_source === 'manual_import') {
+    return Boolean(asset.quote_code) && ['fund', 'etf', 'lof', 'stock_cn', 'stock_us', 'stock_uk'].includes(asset.asset_type_name);
+  }
+  return Boolean(quoteCodeForAsset(asset));
 }
 
 function getMarketStatus() {
@@ -439,5 +467,7 @@ module.exports = {
   refreshMarket,
   getMarketStatus,
   getStoredRates,
-  londonDate
+  londonDate,
+  quoteCodeForAsset,
+  isMarketRefreshCandidate
 };

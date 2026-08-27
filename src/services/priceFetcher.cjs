@@ -53,8 +53,25 @@ async function getStockPrice(code) {
             }
         }
     } catch (e) {}
+
+    // Tencent can be unreachable from some overseas networks. Eastmoney uses
+    // integer cents in f43 and provides a stable fallback for mainland stocks.
+    try {
+        const secid = `${market === 'sh' ? 1 : 0}.${code}`;
+        const resp = await axios.get('https://push2.eastmoney.com/api/qt/stock/get', {
+            timeout: 8000,
+            params: { secid, fields: 'f43,f57,f58' }
+        });
+        const price = normalizeEastmoneyStockPrice(resp.data);
+        if (price) return price;
+    } catch (e) {}
     
     return null;
+}
+
+function normalizeEastmoneyStockPrice(payload) {
+    const raw = Number(payload?.data?.f43);
+    return Number.isFinite(raw) && raw > 0 ? raw / 100 : null;
 }
 
 /**
@@ -234,4 +251,4 @@ function convertCurrency(amount, from, to) {
     return amount;
 }
 
-module.exports = { getPrice, updateExchangeRates, getExchangeRates, convertCurrency };
+module.exports = { getPrice, updateExchangeRates, getExchangeRates, convertCurrency, normalizeEastmoneyStockPrice };

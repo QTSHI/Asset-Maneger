@@ -11,6 +11,7 @@ process.env.NODE_ENV = 'test';
 let db: any;
 let wealth: any;
 let trading212: any;
+let priceFetcher: any;
 let apiServer: any;
 let apiBaseUrl: string;
 
@@ -18,6 +19,7 @@ beforeAll(async () => {
   db = require('../src/services/database.cjs');
   wealth = require('../src/services/wealthService.cjs');
   trading212 = require('../src/services/trading212Service.cjs');
+  priceFetcher = require('../src/services/priceFetcher.cjs');
   const express = require('express');
   const app = express();
   app.use(express.json());
@@ -47,6 +49,11 @@ afterAll(async () => {
 });
 
 describe('asset classification', () => {
+  it('normalizes the mainland stock fallback quote', () => {
+    expect(priceFetcher.normalizeEastmoneyStockPrice({ data: { f43: 2363 } })).toBe(23.63);
+    expect(priceFetcher.normalizeEastmoneyStockPrice({ data: { f43: '-' } })).toBeNull();
+  });
+
   it('maps Trading212 ETFs and stocks without treating unknown instruments as cash', () => {
     expect(trading212.typeForInstrument({ type: 'ETF', ticker: 'VUSA_GB_EQ', currencyCode: 'GBP' })).toBe('etf');
     expect(trading212.typeForInstrument({ type: 'EQUITY', ticker: 'AAPL_US_EQ', currencyCode: 'USD' })).toBe('stock_us');
@@ -72,6 +79,19 @@ describe('Stone Wealth data model', () => {
 
   it('uses Europe/London for daily snapshot boundaries', () => {
     expect(wealth.londonDate(new Date('2026-08-27T23:30:00Z'))).toBe('2026-08-28');
+  });
+
+  it('refreshes imported instruments only when they have a real quote code', () => {
+    expect(wealth.quoteCodeForAsset({ code: 'SQT-XLSX-9', quote_code: '000218' })).toBe('000218');
+    expect(wealth.isMarketRefreshCandidate({
+      code: 'SQT-XLSX-9', quote_code: '000218', asset_type_name: 'fund', external_source: 'manual_import',
+    })).toBe(true);
+    expect(wealth.isMarketRefreshCandidate({
+      code: 'SQT-XLSX-9', quote_code: null, asset_type_name: 'fund', external_source: 'manual_import',
+    })).toBe(false);
+    expect(wealth.isMarketRefreshCandidate({
+      code: 'AAPL', quote_code: 'AAPL', asset_type_name: 'stock_us', external_source: 'trading212',
+    })).toBe(false);
   });
 
   it('uses one valuation service for class and account totals', () => {
