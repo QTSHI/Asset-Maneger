@@ -1,6 +1,5 @@
 # Dependencies
 /node_modules
-/build
 
 # Logs
 *.log
@@ -10,18 +9,19 @@ npm-debug.log*
 *.db.backup
 *.sqlite.backup
 *.sqlite.backup.*
-
-# Local data and databases
 /database.sqlite
+/database.dev.sqlite
+*.sqlite-shm
+*.sqlite-wal
 /data.json
-*.sqlite
-*.db
 
-# Local environment and temporary files
-.env
-.env.*
-!.env.example
-*.bak
+# Native build output and local runtime data
+/build/
+/logs/
+
+# Test output
+/test-results/
+/playwright-report/
 
 # OS generated files
 .DS_Store
@@ -30,3 +30,6 @@ Thumbs.db
 # Editor directories and files
 .vscode/
 .idea/
+.env
+.env.*
+!.env.example

@@ -1,7 +1,9 @@
 #!/bin/bash
-URL="http://localhost:8080"
-LOG_FILE="/root/.openclaw/workspace/asset-tracker/logs/health-check.log"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+URL="http://127.0.0.1:8080/health"
+LOG_FILE="$SCRIPT_DIR/logs/health-check.log"
+mkdir -p "$SCRIPT_DIR/logs"
 if ! curl -s -f "$URL" > /dev/null 2>&1; then
   echo "[$(date)] 网站无法访问，正在重启..." >> "$LOG_FILE"
-  cd /root/.openclaw/workspace/asset-tracker && pm2 restart asset-tracker
+  cd "$SCRIPT_DIR" && pm2 restart asset-tracker
 fi

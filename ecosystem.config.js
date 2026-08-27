@@ -2,7 +2,7 @@ module.exports = {
   apps: [{
     name: 'asset-tracker',
     script: 'src/server.cjs',
-    cwd: '/root/.openclaw/workspace/asset-tracker',
+    cwd: __dirname,
     instances: 1,
     autorestart: true,
     watch: false,

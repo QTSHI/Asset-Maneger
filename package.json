@@ -1,21 +1,52 @@
 {
   "name": "asset-tracker",
-  "version": "1.0.0",
-  "description": "实时资产追踪器 - Stone King Empire",
+  "version": "2.0.0",
+  "description": "Stone Wealth 家庭资产与财务中心",
   "main": "src/server.cjs",
   "scripts": {
     "start": "node src/server.cjs",
-    "dev": "node src/server.cjs"
+    "dev": "concurrently -k -n server,client -c cyan,magenta \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "NODE_ENV=development ASSET_TRACKER_DB_PATH=database.dev.sqlite node src/server.cjs",
+    "dev:client": "vite --config vite.config.mjs",
+    "build": "vite build --config vite.config.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {
+    "@tanstack/react-query": "^5.87.1",
     "axios": "^1.6.2",
     "better-sqlite3": "^12.8.0",
+    "compression": "^1.8.1",
+    "date-fns": "^4.1.0",
+    "decimal.js": "^10.6.0",
     "dotenv": "^17.3.1",
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "lucide-react": "^0.542.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "react-router-dom": "^7.8.2",
+    "recharts": "^3.1.2",
+    "zod": "^4.1.5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@testing-library/jest-dom": "^6.8.0",
+    "@testing-library/react": "^16.3.0",
+    "@types/react": "^19.1.12",
+    "@types/react-dom": "^19.1.9",
+    "@vitejs/plugin-react": "^5.0.2",
+    "concurrently": "^9.2.1",
+    "jsdom": "^26.1.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.4",
+    "vitest": "^3.2.4"
   },
   "engines": {
     "node": ">=18.0.0"
   },
-  "author": "Stone King Empire",
+  "author": "Stone Wealth",
   "license": "MIT"
 }

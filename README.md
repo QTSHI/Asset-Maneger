@@ -1,185 +1,88 @@
-# 🪨 Asset Tracker - 资产追踪器
+# Stone Wealth
 
-实时资产追踪与管理平台 - Stone King Empire
+Stone Wealth 是面向家庭场景的资产与财务中心。原资产追踪能力保留为“资产”模块，并新增家庭预算、实际收支、专项计划、大额收支备忘、统一账户和数据状态。
 
-**访问地址**: https://asset.stoneking.top
+生产地址：<https://asset.stoneking.top>
 
-## 功能
+## 主要能力
 
-- 📊 **资产总览** - 按平台分组显示，自动转换货币
-- 💰 **多平台支持** - 支付宝、同花顺、中信证券、Trading212 等 12+ 平台
-- 📈 **实时价格** - 自动获取 A股、基金、ETF、加密货币最新价格
-- 💱 **智能汇率** - 自动转换 GBP、USD、EUR 等为 CNY
-- 🔐 **SSO 统一认证** - 集成石头大王统一登录系统
-- 📱 **响应式设计** - 支持桌面和移动端
+- 资产按“类别 → 账户 → 持仓”或“账户 → 类别 → 持仓”查看
+- 现金、基金、股票、另类资产和待分类采用统一 CNY 估值
+- 家庭预算与实际收支独立管理，不会自动修改资产
+- 专项计划和未来 30 天大额收支提醒
+- Trading212 现金与开放持仓分别同步，并以账户总值做对账
+- 行情与汇率缓存、组合与持仓每日快照、全量操作审计
+- 明暗主题、金额隐私模式、桌面侧栏和移动端底部导航
 
-## 技术栈
-
-- **后端**: Node.js + Express
-- **数据库**: SQLite (better-sqlite3)
-- **前端**: 原生 HTML/CSS/JavaScript
-- **认证**: SSO (石头大王统一登录)
-- **价格源**: 
-  - 腾讯股票（A股、ETF）
-  - 天天基金网（基金）
-  - CoinGecko（加密货币）
-
-## SSO 登录
-
-资产中心已接入石头大王统一登录系统 (SSO)。
-
-### 登录流程
-
-1. 访问 asset.stoneking.top
-2. 自动跳转到 stoneking.top 登录
-3. 登录成功后自动返回资产中心
-4. 已登录用户访问其他服务无需重复登录
-
-详细文档: `/root/.openclaw/workspace/docs/SSO_LOGIN.md`
-
-## 项目结构
-
-```
-/var/www/asset-tracker/
-├── src/
-│   ├── server.cjs           # 主服务器（含SSO中间件）
-│   ├── config/
-│   │   └── constants.cjs    # 配置常量
-│   ├── services/
-│   │   ├── database.cjs     # 数据库服务
-│   │   └── priceFetcher.cjs # 价格获取服务
-│   └── public/
-│       ├── index.html       # 入口页面
-│       ├── css/
-│       │   └── style.css    # 样式
-│       └── js/
-│           ├── api.js       # API 调用（含token传递）
-│           ├── ui.js        # UI 工具
-│           └── app.js       # 主逻辑
-├── scripts/
-│   └── sync-t212.sh         # Trading212 同步脚本
-├── database.sqlite          # SQLite 数据库
-├── SSOLogin.md              # SSO 登录逻辑文档
-├── ecosystem.config.js      # PM2 配置
-├── package.json
-└── README.md
-```
-
-## API 端点
-
-| 端点 | 方法 | 说明 |
-|------|------|------|
-| `/assets` | GET | 获取所有资产 |
-| `/assets` | POST | 添加资产 |
-| `/assets/:id` | PUT/DELETE | 更新/删除资产 |
-| `/platforms` | GET/POST | 平台管理 |
-| `/currencies` | GET | 货币列表 |
-| `/asset-types` | GET | 资产类型列表 |
-| `/exchange-rates` | GET | 当前汇率 |
-| `/summary-by-currency` | GET | 按货币汇总（含汇率转换） |
-| `/snapshot` | GET | 资产快照 |
-| `/health` | GET | 健康检查 |
-
-**认证方式**: 所有 API 需要传递 token
-- URL参数: `?token=xxx`
-- Header: `X-Auth-Token: xxx`
-- Cookie: `session_token=xxx`
-
-## 支持的资产类型
-
-| 类型 | 代码 | 价格源 |
-|------|------|--------|
-| A股 | stock_cn | 腾讯股票 |
-| 美股 | stock_us | 腾讯美股 |
-| ETF | etf | 腾讯股票 |
-| LOF基金 | lof | 腾讯股票 |
-| 场外基金 | fund | 天天基金网 |
-| 现金 | cash | 固定价格 1 |
-| 加密货币 | crypto | CoinGecko |
-
-## 支持的货币
-
-| 货币 | 代码 | 符号 |
-|------|------|------|
-| 人民币 | CNY | ¥ |
-| 英镑 | GBP | £ |
-| 美元 | USD | $ |
-| 欧元 | EUR | € |
-| 迪拉姆 | AED | د.إ |
-| 日元 | JPY | ¥ |
-
-## PM2 管理
+## 本地预览
 
 ```bash
-# 查看状态
-pm2 list
-
-# 查看日志
-pm2 logs asset-tracker
-
-# 重启
-pm2 restart asset-tracker
-
-# 停止
-pm2 stop asset-tracker
+npm install
+npm run dev
 ```
 
-## Trading212 自动同步
+打开 <http://127.0.0.1:5173>。本地预览使用 `database.dev.sqlite` 和模拟家庭成员身份，不会改动正式数据库，也不会进入生产 SSO 逻辑。
 
-每小时自动同步 Trading212 账户余额。
+如果 `better-sqlite3` 报 Mach-O 或架构错误，先在项目目录执行：
 
 ```bash
-# 手动同步
-/var/www/asset-tracker/scripts/sync-t212.sh
-
-# 查看同步日志
-tail -f /var/log/t212-sync.log
+rm -rf node_modules
+npm install
 ```
 
-## 显示效果
+## 常用检查
 
-首页按平台分组显示资产：
-
-```
-总资产: ¥100,000.00（示例）
-汇率: £1 = ¥9.15  $1 = ¥7.24  €1 = ¥7.85
-
-┌──────────────┐ ┌──────────────┐ ┌──────────────┐
-│ 示例银行      │ │ 示例券商      │ │ 示例基金      │
-│ ¥50,000.00   │ │ £2,000.00    │ │ ¥30,000.00   │
-│ ≈ ¥50,000.00 │ │ ≈ ¥18,000.00 │ │ ≈ ¥30,000.00 │
-│ 3项          │ │ 2项          │ │ 4项          │
-└──────────────┘ └──────────────┘ └──────────────┘
+```bash
+npm run typecheck
+npm test
+npm run test:e2e
+npm run build
+npm audit
 ```
 
-点击平台卡片可查看该平台所有资产详情。
+端到端测试覆盖 375px、768px、常规桌面和 1440px 页面。
 
-## 更新日志
+## 配置
 
-### 2026-04-12
-- ✅ 集成 SSO 统一登录系统
-- ✅ 添加 Token 缓存（5分钟 TTL）
-- ✅ 按平台分组显示资产
-- ✅ 自动货币转换（GBP/USD/EUR → CNY）
-- ✅ 添加 `/api/auth/token` 端点
-- ✅ 首页注入 `window.__USER__` 解决 httpOnly cookie 问题
-- ✅ 前端错误处理优化
+复制 `.env.example` 后通过环境变量注入密钥，不要把真实值提交到 Git：
 
-### 2026-03-24
-- ✅ 项目迁移至 `/var/www/asset-tracker`
-- ✅ 添加 Trading212 自动同步
-- ✅ 升级 better-sqlite3 支持 Node.js 24
+```bash
+T212_API_KEY=...
+T212_API_SECRET=...
+```
 
-### 2026-03-12
-- ✅ 代码模块化重构
-- ✅ 添加加密货币价格获取（CoinGecko API）
-- ✅ 配置 PM2 自动重启
+生产认证继续使用既有 SSO：Token 验证、五分钟缓存、服务权限、登录跳转、401 行为及用户注入均保留。业务接口统一挂载在认证之后的 `/api/v2`。
 
-## 相关文档
+## 数据与迁移
 
-- [SSO 登录逻辑](./SSOLogin.md)
-- [SSO 接入指南](/root/.openclaw/workspace/docs/SSO_LOGIN.md)
+- 正式数据：`database.sqlite`
+- 本地预览副本：`database.dev.sqlite`（已忽略）
+- 版本记录：`schema_migrations`
+- 所有删除均为软删除，写操作记录 SSO 用户名
+- 旧资产、平台、货币和类型 ID 不变
+- `daily_summary` 历史数据迁入 `portfolio_snapshots`
 
-## License
+上线前至少同时备份 `database.sqlite` 和当前代码版本。上传构建产物和后端代码时不要覆盖正式数据库，然后再由新版启动过程执行增量迁移。
 
-MIT © Stone King Empire
+## 目录
+
+```text
+client/                    React + TypeScript 前端
+src/server.cjs             Express 启动与原 SSO 边界
+src/routes/v2.cjs          Stone Wealth API
+src/services/              估值、行情、Trading212 与数据库服务
+src/db/migrations.cjs      增量数据库迁移
+src/public/                npm run build 生成的部署产物
+tests/                     单元与端到端测试
+```
+
+## 部署
+
+```bash
+npm ci
+npm run check
+npm run build
+pm2 startOrReload ecosystem.config.js
+```
+
+PM2 进程名仍为 `asset-tracker`，避免破坏现有运维脚本。每日快照可由服务内定时任务完成，也可单独执行 `daily-update.sh`。

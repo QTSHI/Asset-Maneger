@@ -3,16 +3,20 @@
  */
 
 const express = require('express');
+const compression = require('compression');
 const path = require('path');
 const https = require('https');
 const fs = require('fs');
 
 const db = require('./services/database.cjs');
 const { updateExchangeRates, getPrice, getExchangeRates, convertCurrency } = require('./services/priceFetcher.cjs');
+const wealthService = require('./services/wealthService.cjs');
+const v2Router = require('./routes/v2.cjs');
 const { PORT, EXCHANGE_RATE_INTERVAL } = require('./config/constants.cjs');
 
 const SSO_BASE_URL = 'https://stoneking.top';
 const SERVICE_NAME = 'asset-tracker';
+const IS_DEVELOPMENT = process.env.NODE_ENV === 'development';
 
 const API_PATHS = ['/asset-types', '/currencies', '/platforms', '/assets', '/snapshot', '/refresh-rates', '/exchange-rates', '/login-token', '/summary-by-currency', '/login'];
 
@@ -60,6 +64,7 @@ function isApiRequest(req) {
 }
 
 const app = express();
+app.use(compression());
 app.use(express.json());
 
 app.use((req, res, next) => {
@@ -107,7 +112,20 @@ async function ssoAuthMiddleware(req, res, next) {
     next();
 }
 
-app.use(ssoAuthMiddleware);
+function localPreviewAuthMiddleware(req, res, next) {
+    req.user = {
+        username: 'local-preview',
+        is_admin: true,
+        services: [SERVICE_NAME]
+    };
+    req.token = 'local-preview';
+    next();
+}
+
+app.use(IS_DEVELOPMENT ? localPreviewAuthMiddleware : ssoAuthMiddleware);
+
+// Stone Wealth 业务路由：挂载在现有 SSO 认证之后。
+app.use('/api/v2', v2Router);
 
 // 首页 - 注入用户信息
 app.get('/', (req, res) => {
@@ -342,8 +360,15 @@ app.get('/exchange-rates', (req, res) => {
     res.json(getExchangeRates());
 });
 
-app.listen(PORT, () => {
-    console.log(`✅ Asset Tracker已启动，端口 ${PORT}`);
-    console.log(`✅ 已集成SSO认证 (${SSO_BASE_URL})`);
+const LISTEN_HOST = IS_DEVELOPMENT ? '127.0.0.1' : '0.0.0.0';
+
+app.listen(PORT, LISTEN_HOST, () => {
+    console.log(`✅ Asset Tracker已启动: http://${LISTEN_HOST}:${PORT}`);
+    console.log(IS_DEVELOPMENT
+        ? '✅ 本地预览模式：已跳过 SSO，使用开发数据库'
+        : `✅ 已集成SSO认证 (${SSO_BASE_URL})`);
     setInterval(updateExchangeRates, EXCHANGE_RATE_INTERVAL);
+    setInterval(() => wealthService.refreshMarket(), 30 * 60 * 1000);
+    setInterval(() => wealthService.saveDailySnapshot(), 60 * 60 * 1000);
+    setTimeout(() => wealthService.refreshMarket(), 1500);
 });
