@@ -309,6 +309,115 @@ function getHouseholdSummary(monthInput) {
   };
 }
 
+function monthsBetween(startMonth, endMonth) {
+  const months = [];
+  const [startYear, startValue] = startMonth.split('-').map(Number);
+  const [endYear, endValue] = endMonth.split('-').map(Number);
+  const cursor = new Date(Date.UTC(startYear, startValue - 1, 1));
+  const end = new Date(Date.UTC(endYear, endValue - 1, 1));
+  while (cursor <= end && months.length < 120) {
+    months.push(`${cursor.getUTCFullYear()}-${String(cursor.getUTCMonth() + 1).padStart(2, '0')}`);
+    cursor.setUTCMonth(cursor.getUTCMonth() + 1);
+  }
+  return months;
+}
+
+function getHouseholdPlan() {
+  const settings = db.prepare(`
+    SELECT hps.*, c.code AS opening_currency_code
+    FROM household_plan_settings hps
+    JOIN currencies c ON c.id = hps.opening_currency_id
+    WHERE hps.id = 1
+  `).get();
+  if (!settings) return null;
+
+  const budgets = new Map(db.prepare(`
+    SELECT mb.month,
+           SUM(CASE WHEN hc.kind = 'income' THEN mb.planned_amount_cny ELSE 0 END) AS planned_income,
+           SUM(CASE WHEN hc.kind = 'expense' THEN mb.planned_amount_cny ELSE 0 END) AS planned_expense
+    FROM monthly_budgets mb
+    JOIN household_categories hc ON hc.id = mb.category_id
+    WHERE mb.month BETWEEN ? AND ? AND hc.archived_at IS NULL
+    GROUP BY mb.month
+  `).all(settings.start_month, settings.end_month).map((row) => [row.month, row]));
+
+  const actuals = new Map(db.prepare(`
+    SELECT substr(occurred_on, 1, 7) AS month,
+           SUM(CASE WHEN kind = 'income' THEN amount_cny ELSE 0 END) AS actual_income,
+           SUM(CASE WHEN kind = 'expense' THEN amount_cny ELSE 0 END) AS actual_expense
+    FROM household_transactions
+    WHERE archived_at IS NULL AND substr(occurred_on, 1, 7) BETWEEN ? AND ?
+    GROUP BY substr(occurred_on, 1, 7)
+  `).all(settings.start_month, settings.end_month).map((row) => [row.month, row]));
+
+  const memos = new Map(db.prepare(`
+    SELECT substr(fm.due_date, 1, 7) AS month,
+           SUM(CASE WHEN fm.kind = 'income' THEN fm.expected_amount * COALESCE(er.rate_to_cny, 1) ELSE 0 END) AS memo_income,
+           SUM(CASE WHEN fm.kind = 'expense' THEN fm.expected_amount * COALESCE(er.rate_to_cny, 1) ELSE 0 END) AS memo_expense
+    FROM financial_memos fm
+    JOIN currencies c ON c.id = fm.currency_id
+    LEFT JOIN exchange_rate_cache er ON er.currency_code = c.code
+    WHERE fm.archived_at IS NULL AND fm.status = 'pending'
+      AND substr(fm.due_date, 1, 7) BETWEEN ? AND ?
+    GROUP BY substr(fm.due_date, 1, 7)
+  `).all(settings.start_month, settings.end_month).map((row) => [row.month, row]));
+
+  const currentMonth = londonDate().slice(0, 7);
+  let balance = new Decimal(settings.opening_amount).times(settings.planning_rate_to_cny);
+  const rows = monthsBetween(settings.start_month, settings.end_month).map((month) => {
+    const budget = budgets.get(month) || {};
+    const actual = actuals.get(month) || {};
+    const memo = memos.get(month) || {};
+    const plannedIncome = new Decimal(budget.planned_income || 0);
+    const plannedExpense = new Decimal(budget.planned_expense || 0);
+    const actualIncome = new Decimal(actual.actual_income || 0);
+    const actualExpense = new Decimal(actual.actual_expense || 0);
+    const memoIncome = new Decimal(memo.memo_income || 0);
+    const memoExpense = new Decimal(memo.memo_expense || 0);
+    const usesActual = month < currentMonth;
+    const forecastIncome = (usesActual ? actualIncome : plannedIncome).plus(memoIncome);
+    const forecastExpense = (usesActual ? actualExpense : plannedExpense).plus(memoExpense);
+    const openingBalance = balance;
+    balance = balance.plus(forecastIncome).minus(forecastExpense);
+    return {
+      month,
+      status: usesActual ? 'actual' : month === currentMonth ? 'current' : 'forecast',
+      openingBalanceCny: money(openingBalance),
+      plannedIncomeCny: money(plannedIncome),
+      plannedExpenseCny: money(plannedExpense),
+      actualIncomeCny: money(actualIncome),
+      actualExpenseCny: money(actualExpense),
+      memoIncomeCny: money(memoIncome),
+      memoExpenseCny: money(memoExpense),
+      projectedNetCny: money(forecastIncome.minus(forecastExpense)),
+      closingBalanceCny: money(balance)
+    };
+  });
+
+  const sum = (key) => money(rows.reduce((total, row) => total.plus(row[key] || 0), new Decimal(0)));
+  const firstNegative = rows.find((row) => row.closingBalanceCny < 0)?.month || null;
+  return {
+    settings: {
+      openingAmount: money(settings.opening_amount),
+      openingCurrencyId: settings.opening_currency_id,
+      openingCurrencyCode: settings.opening_currency_code,
+      planningRateToCny: precise(settings.planning_rate_to_cny),
+      startMonth: settings.start_month,
+      endMonth: settings.end_month
+    },
+    totals: {
+      openingBalanceCny: money(new Decimal(settings.opening_amount).times(settings.planning_rate_to_cny)),
+      plannedIncomeCny: sum('plannedIncomeCny'),
+      plannedExpenseCny: sum('plannedExpenseCny'),
+      memoIncomeCny: sum('memoIncomeCny'),
+      memoExpenseCny: sum('memoExpenseCny'),
+      projectedClosingBalanceCny: money(balance),
+      firstNegativeMonth: firstNegative
+    },
+    months: rows
+  };
+}
+
 function getTrend(range = '3M') {
   const days = { '1M': 31, '3M': 93, '1Y': 366, ALL: 36500 }[range] || 93;
   return db.prepare(`
@@ -499,6 +608,8 @@ module.exports = {
   valueAssets,
   getDashboard,
   getHouseholdSummary,
+  getHouseholdPlan,
+  monthsBetween,
   getTrend,
   saveDailySnapshot,
   refreshMarket,

@@ -270,6 +270,46 @@ router.get('/household/budgets', handler(async (req, res) => {
   ok(res, wealth.getHouseholdSummary(req.query.month));
 }));
 
+const householdPlanSettingsSchema = z.object({
+  opening_amount: z.coerce.number().nonnegative(),
+  opening_currency_id: idSchema,
+  planning_rate_to_cny: z.coerce.number().positive(),
+  start_month: monthString,
+  end_month: monthString
+}).refine((value) => value.start_month <= value.end_month, {
+  message: '结束月份不能早于开始月份', path: ['end_month']
+});
+
+router.get('/household/plan', handler(async (_req, res) => {
+  ok(res, wealth.getHouseholdPlan());
+}));
+
+router.put('/household/plan/settings', handler(async (req, res) => {
+  const input = parse(householdPlanSettingsSchema, req.body);
+  const user = username(req);
+  const before = db.prepare('SELECT * FROM household_plan_settings WHERE id = 1').get();
+  db.prepare(`
+    INSERT INTO household_plan_settings (
+      id, opening_amount, opening_currency_id, planning_rate_to_cny,
+      start_month, end_month, created_by, updated_by, updated_at
+    ) VALUES (1, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ON CONFLICT(id) DO UPDATE SET
+      opening_amount = excluded.opening_amount,
+      opening_currency_id = excluded.opening_currency_id,
+      planning_rate_to_cny = excluded.planning_rate_to_cny,
+      start_month = excluded.start_month,
+      end_month = excluded.end_month,
+      updated_by = excluded.updated_by,
+      updated_at = CURRENT_TIMESTAMP
+  `).run(
+    input.opening_amount, input.opening_currency_id, input.planning_rate_to_cny,
+    input.start_month, input.end_month, user, user
+  );
+  const after = db.prepare('SELECT * FROM household_plan_settings WHERE id = 1').get();
+  audit('household_plan_settings', 1, 'update', user, before, after);
+  ok(res, wealth.getHouseholdPlan());
+}));
+
 router.put('/household/budgets', handler(async (req, res) => {
   const input = parse(budgetSchema, req.body);
   const user = username(req);

@@ -68,13 +68,36 @@ describe('asset classification', () => {
 
 describe('Stone Wealth data model', () => {
   it('applies migrations and seeds household categories', () => {
-    expect(db.prepare('SELECT COUNT(*) count FROM schema_migrations').get().count).toBeGreaterThanOrEqual(3);
+    expect(db.prepare('SELECT COUNT(*) count FROM schema_migrations').get().count).toBeGreaterThanOrEqual(4);
     expect(db.prepare('SELECT COUNT(*) count FROM household_categories').get().count).toBeGreaterThan(5);
     const columns = db.prepare('PRAGMA table_info(assets)').all().map((row: any) => row.name);
     expect(columns).toEqual(expect.arrayContaining([
       'quote_code', 'quantity_status', 'valuation_mode', 'imported_market_value',
       'imported_cost_value', 'valuation_as_of',
     ]));
+  });
+
+  it('builds a cross-month household cash plan from budgets and large memos', () => {
+    const cny = db.prepare("SELECT id FROM currencies WHERE code='CNY'").get().id;
+    const category = db.prepare("SELECT id FROM household_categories WHERE kind='expense' LIMIT 1").get().id;
+    db.prepare(`
+      UPDATE household_plan_settings
+      SET opening_amount = 10000, opening_currency_id = ?, planning_rate_to_cny = 1,
+          start_month = '2032-01', end_month = '2032-02'
+      WHERE id = 1
+    `).run(cny);
+    db.prepare(`INSERT INTO monthly_budgets (month, category_id, planned_amount_cny) VALUES ('2032-01', ?, 1000)`).run(category);
+    const memo = db.prepare(`
+      INSERT INTO financial_memos (kind, title, expected_amount, currency_id, due_date, status)
+      VALUES ('expense', 'Plan test memo', 500, ?, '2032-02-10', 'pending')
+    `).run(cny);
+
+    const plan = wealth.getHouseholdPlan();
+    expect(plan.totals).toMatchObject({ openingBalanceCny: 10000, plannedExpenseCny: 1000, memoExpenseCny: 500, projectedClosingBalanceCny: 8500 });
+    expect(plan.months.map((row: any) => row.closingBalanceCny)).toEqual([9000, 8500]);
+
+    db.prepare('DELETE FROM financial_memos WHERE id = ?').run(Number(memo.lastInsertRowid));
+    db.prepare("DELETE FROM monthly_budgets WHERE month IN ('2032-01', '2032-02')").run();
   });
 
   it('uses Europe/London for daily snapshot boundaries', () => {

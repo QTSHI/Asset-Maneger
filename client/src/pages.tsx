@@ -36,6 +36,7 @@ import {
 import type {
   DashboardData,
   FinancialMemo,
+  HouseholdPlan,
   HouseholdProject,
   HouseholdSummary,
   HouseholdTransaction,
@@ -702,6 +703,7 @@ export function BudgetPage({ privateMode }: { privateMode: boolean }) {
           </div>
         </div>
       )}
+      {meta.data && <HouseholdPlanSection meta={meta.data} privateMode={privateMode} />}
       <section className="content-panel">
         <div className="content-panel-head">
           <div>
@@ -761,6 +763,119 @@ export function BudgetPage({ privateMode }: { privateMode: boolean }) {
         </div>
       </section>
     </div>
+  );
+}
+
+function HouseholdPlanSection({
+  meta,
+  privateMode,
+}: {
+  meta: MetaData;
+  privateMode: boolean;
+}) {
+  const client = useQueryClient();
+  const query = useQuery({
+    queryKey: ["household-plan"],
+    queryFn: () => api.get<HouseholdPlan>("/household/plan"),
+  });
+  const [settings, setSettings] = useState<HouseholdPlan["settings"] | null>(null);
+  useEffect(() => {
+    if (query.data) setSettings(query.data.settings);
+  }, [query.data]);
+  const save = useMutation({
+    mutationFn: () => api.put("/household/plan/settings", {
+      opening_amount: settings?.openingAmount || 0,
+      opening_currency_id: settings?.openingCurrencyId,
+      planning_rate_to_cny: settings?.planningRateToCny || 1,
+      start_month: settings?.startMonth,
+      end_month: settings?.endMonth,
+    }),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["household-plan"] });
+      client.invalidateQueries({ queryKey: ["dashboard"] });
+    },
+  });
+  const plan = query.data;
+  if (!plan || !settings) return null;
+  return (
+    <section className="content-panel household-plan-panel">
+      <div className="content-panel-head">
+        <div>
+          <h3>跨月家庭资金规划</h3>
+          <p>把起始家庭资金、月度预算和待处理大额事项放在同一条时间线上。</p>
+        </div>
+        <CalendarDays size={20} />
+      </div>
+      <div className="plan-settings-grid">
+        <label>
+          <span>起始资金</span>
+          <input
+            type="number"
+            min="0"
+            step="any"
+            value={settings.openingAmount}
+            onChange={(event) => setSettings({ ...settings, openingAmount: Number(event.target.value) })}
+          />
+        </label>
+        <label>
+          <span>资金币种</span>
+          <select
+            value={settings.openingCurrencyId}
+            onChange={(event) => setSettings({ ...settings, openingCurrencyId: Number(event.target.value) })}
+          >
+            {meta.currencies.map((currency) => <option key={currency.id} value={currency.id}>{currency.code}</option>)}
+          </select>
+        </label>
+        <label>
+          <span>规划汇率（兑 CNY）</span>
+          <input
+            type="number"
+            min="0.000001"
+            step="any"
+            value={settings.planningRateToCny}
+            onChange={(event) => setSettings({ ...settings, planningRateToCny: Number(event.target.value) })}
+          />
+        </label>
+        <label>
+          <span>开始月份</span>
+          <input type="month" value={settings.startMonth} onChange={(event) => setSettings({ ...settings, startMonth: event.target.value })} />
+        </label>
+        <label>
+          <span>结束月份</span>
+          <input type="month" value={settings.endMonth} onChange={(event) => setSettings({ ...settings, endMonth: event.target.value })} />
+        </label>
+        <button className="secondary-button" disabled={save.isPending} onClick={() => save.mutate()}>
+          {save.isPending ? "保存中" : "更新规划"}
+        </button>
+      </div>
+      <div className="plan-summary-grid">
+        <div><span>起始家庭资金</span><strong>{money(plan.totals.openingBalanceCny, privateMode)}</strong></div>
+        <div><span>月度预算合计</span><strong>{money(plan.totals.plannedExpenseCny, privateMode)}</strong></div>
+        <div><span>待处理大额支出</span><strong>{money(plan.totals.memoExpenseCny, privateMode)}</strong></div>
+        <div className={plan.totals.projectedClosingBalanceCny < 0 ? "negative" : "positive"}>
+          <span>计划结束预计剩余</span><strong>{money(plan.totals.projectedClosingBalanceCny, privateMode)}</strong>
+        </div>
+      </div>
+      {plan.totals.firstNegativeMonth && (
+        <div className="plan-warning"><AlertCircle size={16} />预计在 {monthLabel(plan.totals.firstNegativeMonth)} 出现资金缺口</div>
+      )}
+      <div className="responsive-table plan-table">
+        <table>
+          <thead><tr><th>月份</th><th>月度预算</th><th>大额事项</th><th>预计净变化</th><th>预计月末余额</th></tr></thead>
+          <tbody>
+            {plan.months.map((row) => (
+              <tr key={row.month}>
+                <td data-label="月份"><strong>{monthLabel(row.month)}</strong><small>{row.status === "actual" ? "实际" : row.status === "current" ? "本月" : "计划"}</small></td>
+                <td data-label="月度预算">{money(row.plannedExpenseCny, privateMode)}</td>
+                <td data-label="大额事项">{money(row.memoExpenseCny, privateMode)}</td>
+                <td data-label="预计净变化"><span className={row.projectedNetCny >= 0 ? "positive" : "negative"}>{money(row.projectedNetCny, privateMode)}</span></td>
+                <td data-label="预计月末余额"><strong>{money(row.closingBalanceCny, privateMode)}</strong></td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 

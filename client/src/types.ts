@@ -78,6 +78,39 @@ export interface HouseholdSummary {
   memos: FinancialMemo[];
 }
 
+export interface HouseholdPlan {
+  settings: {
+    openingAmount: number;
+    openingCurrencyId: number;
+    openingCurrencyCode: string;
+    planningRateToCny: number;
+    startMonth: string;
+    endMonth: string;
+  };
+  totals: {
+    openingBalanceCny: number;
+    plannedIncomeCny: number;
+    plannedExpenseCny: number;
+    memoIncomeCny: number;
+    memoExpenseCny: number;
+    projectedClosingBalanceCny: number;
+    firstNegativeMonth?: string | null;
+  };
+  months: Array<{
+    month: string;
+    status: "actual" | "current" | "forecast";
+    openingBalanceCny: number;
+    plannedIncomeCny: number;
+    plannedExpenseCny: number;
+    actualIncomeCny: number;
+    actualExpenseCny: number;
+    memoIncomeCny: number;
+    memoExpenseCny: number;
+    projectedNetCny: number;
+    closingBalanceCny: number;
+  }>;
+}
+
 export interface HouseholdTransaction {
   id: number;
   kind: "income" | "expense";

@@ -330,6 +330,33 @@ const migrations = [
           );
       `);
     }
+  },
+  {
+    version: '004_household_plan_settings',
+    run(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS household_plan_settings (
+          id INTEGER PRIMARY KEY CHECK(id = 1),
+          opening_amount REAL NOT NULL DEFAULT 0 CHECK(opening_amount >= 0),
+          opening_currency_id INTEGER NOT NULL REFERENCES currencies(id),
+          planning_rate_to_cny REAL NOT NULL DEFAULT 1 CHECK(planning_rate_to_cny > 0),
+          start_month TEXT NOT NULL,
+          end_month TEXT NOT NULL,
+          created_by TEXT,
+          updated_by TEXT,
+          created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          updated_at DATETIME
+        );
+      `);
+      const cny = db.prepare("SELECT id FROM currencies WHERE code = 'CNY'").get();
+      if (cny) {
+        db.prepare(`
+          INSERT OR IGNORE INTO household_plan_settings (
+            id, opening_amount, opening_currency_id, planning_rate_to_cny, start_month, end_month
+          ) VALUES (1, 0, ?, 1, strftime('%Y-%m', 'now'), strftime('%Y-%m', 'now', '+11 months'))
+        `).run(cny.id);
+      }
+    }
   }
 ];
 
