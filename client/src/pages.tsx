@@ -26,6 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
+import { platformName } from "./accountHierarchy";
 import {
   currentMonth,
   MonthNavigator,
@@ -188,8 +189,8 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
       }
     >();
     for (const asset of filtered) {
-      const key = String(view === "class" ? asset.classCode : asset.accountId);
-      const label = view === "class" ? asset.classLabel : asset.accountName;
+      const key = view === "class" ? asset.classCode : platformName(asset.accountName);
+      const label = view === "class" ? asset.classLabel : platformName(asset.accountName);
       const item = map.get(key) || {
         key,
         label,
@@ -1849,13 +1850,13 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
       { name: string; accounts: any[]; assets: ValuedAsset[]; value: number }
     >();
     for (const account of query.data || []) {
-      const name = String(account.name).split(" · ")[0];
+      const name = platformName(account.name);
       const group = map.get(name) || { name, accounts: [], assets: [], value: 0 };
       group.accounts.push(account);
       map.set(name, group);
     }
     for (const asset of assets.data || []) {
-      const name = String(asset.accountName).split(" · ")[0];
+      const name = platformName(asset.accountName);
       const group = map.get(name) || { name, accounts: [], assets: [], value: 0 };
       group.assets.push(asset);
       group.value += asset.marketValueCny;
