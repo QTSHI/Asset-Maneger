@@ -230,17 +230,19 @@ function getHouseholdSummary(monthInput) {
   `).all(month);
 
   const budgets = db.prepare(`
-    SELECT mb.*, hc.name AS category_name, hc.kind, hc.color, hc.icon,
+    SELECT mb.id AS budget_id, hc.id AS category_id,
+           COALESCE(mb.planned_amount_cny, 0) AS planned_amount_cny,
+           hc.name AS category_name, hc.kind, hc.color, hc.icon,
            COALESCE(SUM(CASE WHEN ht.archived_at IS NULL THEN ht.amount_cny ELSE 0 END), 0) AS actual_amount_cny
-    FROM monthly_budgets mb
-    JOIN household_categories hc ON hc.id = mb.category_id
+    FROM household_categories hc
+    LEFT JOIN monthly_budgets mb ON mb.category_id = hc.id AND mb.month = ?
     LEFT JOIN household_transactions ht
-      ON ht.category_id = mb.category_id AND substr(ht.occurred_on, 1, 7) = mb.month
-    WHERE mb.month = ? AND hc.archived_at IS NULL
-    GROUP BY mb.id
+      ON ht.category_id = hc.id AND substr(ht.occurred_on, 1, 7) = ?
+    WHERE hc.archived_at IS NULL
+    GROUP BY hc.id
     ORDER BY hc.kind DESC, hc.sort_order, hc.name
-  `).all(month).map((row) => ({
-    id: row.id,
+  `).all(month, month).map((row) => ({
+    id: row.budget_id || -row.category_id,
     categoryId: row.category_id,
     categoryName: row.category_name,
     kind: row.kind,

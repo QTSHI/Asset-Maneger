@@ -139,6 +139,8 @@ describe('Stone Wealth data model', () => {
     const dashboard = wealth.getDashboard({ month: '2026-08', range: 'ALL' });
     expect(dashboard.household.totals.expense).toBe(80);
     expect(dashboard.totals.marketValueCny).toBe(1000);
+    const categorySummary = dashboard.household.budgets.find((row: any) => row.categoryId === category);
+    expect(categorySummary).toMatchObject({ planned: 0, actual: 80, remaining: -80 });
   });
 
   it('reports investment profit inside the fund allocation', () => {
