@@ -150,7 +150,14 @@ describe('Stone Wealth data model', () => {
     `).run();
 
     const valued = wealth.valueAssets().find((row: any) => row.id === Number(asset.lastInsertRowid));
-    expect(valued).toMatchObject({ marketValueCny: 125, costValueCny: 100, quantityStatus: 'estimated', valuationMode: 'position_value' });
+    expect(valued).toMatchObject({
+      currentPrice: null,
+      marketValueCny: 125,
+      costValueCny: 100,
+      quantityStatus: 'estimated',
+      valuationMode: 'position_value',
+      valuationBasis: 'imported_position',
+    });
 
     db.prepare('DELETE FROM assets WHERE id = ?').run(Number(asset.lastInsertRowid));
     db.prepare("DELETE FROM quote_cache WHERE cache_key = 'LEGACY-POSITION_fund'").run();

@@ -360,7 +360,7 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
                   <th>资产</th>
                   <th>账户</th>
                   <th>类型</th>
-                  <th>现价</th>
+                  <th>单位现价</th>
                   <th>市值</th>
                   <th>盈亏</th>
                   <th>行情</th>
@@ -376,7 +376,16 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
                     </td>
                     <td data-label="账户">{asset.accountName}</td>
                     <td data-label="类型"><span className="tag">{asset.subtypeLabel}</span></td>
-                    <td data-label="现价">{asset.currentPrice.toLocaleString()}</td>
+                    <td data-label="单位现价">
+                      {asset.currentPrice == null ? (
+                        <span className="muted-value">—</span>
+                      ) : (
+                        asset.currentPrice.toLocaleString("zh-CN", { maximumFractionDigits: 6 })
+                      )}
+                      {asset.valuationBasis === "imported_position" && (
+                        <small>持仓市值沿用导入金额</small>
+                      )}
+                    </td>
                     <td data-label="市值"><strong>{money(asset.marketValueCny, privateMode)}</strong></td>
                     <td data-label="盈亏">
                       <span className={asset.profitCny >= 0 ? "positive" : "negative"}>

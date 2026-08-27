@@ -56,6 +56,8 @@ function getActiveAssets() {
            c.code AS currency_code, at.name AS asset_type_name,
            COALESCE(at.asset_class_code, 'unclassified') AS asset_class_code,
            COALESCE(at.asset_subtype_code, 'unclassified') AS asset_subtype_code,
+           live_q.price AS live_price,
+           imported_q.price AS imported_price,
            COALESCE(live_q.price, imported_q.price) AS cached_price,
            COALESCE(live_q.status, imported_q.status) AS quote_status,
            COALESCE(live_q.fetched_at, imported_q.fetched_at) AS quote_fetched_at,
@@ -67,6 +69,7 @@ function getActiveAssets() {
     LEFT JOIN currencies c ON c.id = a.currency_id
     LEFT JOIN quote_cache live_q
       ON live_q.cache_key = COALESCE(NULLIF(a.quote_code, ''), a.code) || '_' || at.name
+     AND (a.external_source IS NULL OR a.external_source <> 'manual_import' OR NULLIF(a.quote_code, '') IS NOT NULL)
     LEFT JOIN quote_cache imported_q
       ON imported_q.cache_key = a.code || '_' || at.name
     WHERE a.archived_at IS NULL AND p.archived_at IS NULL
@@ -81,12 +84,14 @@ function valueAssets() {
     const rate = rates[currency] || 1;
     const isCash = asset.asset_type_name === 'cash' || String(asset.code).startsWith('CASH-');
     const isAggregateT212 = asset.code === 'T212-TOTAL';
+    const usesImportedPosition = asset.valuation_mode === 'position_value';
     const currentPrice = isCash || isAggregateT212
       ? 1
-      : Number(asset.cached_price ?? asset.cost_price ?? 0);
+      : usesImportedPosition
+        ? (asset.live_price == null ? null : Number(asset.live_price))
+        : Number(asset.cached_price ?? asset.cost_price ?? 0);
     const classCode = isAggregateT212 ? 'unclassified' : (asset.asset_class_code || 'unclassified');
     const subtypeCode = isAggregateT212 ? 'unclassified' : (asset.asset_subtype_code || 'unclassified');
-    const usesImportedPosition = asset.valuation_mode === 'position_value';
     const marketOriginal = usesImportedPosition
       ? new Decimal(asset.imported_market_value ?? 0)
       : new Decimal(asset.shares || 0).times(currentPrice || 0);
@@ -104,13 +109,14 @@ function valueAssets() {
       name: asset.name || asset.code,
       shares: precise(asset.shares),
       costPrice: precise(asset.cost_price),
-      currentPrice: precise(currentPrice),
+      currentPrice: currentPrice == null ? null : precise(currentPrice),
       quoteCode: asset.quote_code || null,
       quantityStatus: asset.quantity_status || 'verified',
       valuationMode: asset.valuation_mode || 'units',
       importedMarketValue: asset.imported_market_value == null ? null : money(asset.imported_market_value),
       importedCostValue: asset.imported_cost_value == null ? null : money(asset.imported_cost_value),
       valuationAsOf: asset.valuation_as_of || null,
+      valuationBasis: usesImportedPosition ? 'imported_position' : 'unit_price',
       currency,
       rateToCny: precise(rate),
       marketValue: money(marketOriginal),
