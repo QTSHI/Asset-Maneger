@@ -635,6 +635,7 @@ export function BudgetPage({ privateMode }: { privateMode: boolean }) {
       api.get<HouseholdSummary>(`/household/budgets?month=${month}`),
   });
   const [amounts, setAmounts] = useState<Record<number, number>>({});
+  const [showAllCategories, setShowAllCategories] = useState(false);
   useEffect(() => {
     if (query.data)
       setAmounts(
@@ -667,6 +668,27 @@ export function BudgetPage({ privateMode }: { privateMode: boolean }) {
     onSuccess: () => client.invalidateQueries({ queryKey: ["budget", month] }),
   });
   const data = query.data;
+  const expenseCategories = (meta.data?.categories || []).filter(
+    (category) => category.kind === "expense",
+  );
+  const commonCategoryNames = new Set([
+    "家庭生活费",
+    "旅行",
+    "人情往来",
+    "其他支出",
+  ]);
+  const visibleExpenseCategories = showAllCategories
+    ? expenseCategories
+    : expenseCategories.filter((category) => {
+        const budget = data?.budgets.find(
+          (item) => item.categoryId === category.id,
+        );
+        return (
+          commonCategoryNames.has(category.name) ||
+          Number(budget?.planned || 0) > 0 ||
+          Number(budget?.actual || 0) > 0
+        );
+      });
   return (
     <div className="page-stack">
       <PageHead
@@ -735,10 +757,21 @@ export function BudgetPage({ privateMode }: { privateMode: boolean }) {
             <RefreshCw size={15} /> 复制 {previousMonth}
           </button>
         </div>
+        <div className="budget-category-mode">
+          <span>
+            默认显示家庭常用分类；已有预算或实际支出的分类会自动保留。
+          </span>
+          <button
+            className="text-button"
+            onClick={() => setShowAllCategories((value) => !value)}
+          >
+            {showAllCategories
+              ? "收起可选分类"
+              : `显示全部分类（${expenseCategories.length}）`}
+          </button>
+        </div>
         <div className="budget-editor">
-          {meta.data?.categories
-            .filter((x) => x.kind === "expense")
-            .map((category) => {
+          {visibleExpenseCategories.map((category) => {
               const actual =
                 data?.budgets.find((x) => x.categoryId === category.id)
                   ?.actual || 0;
@@ -773,7 +806,7 @@ export function BudgetPage({ privateMode }: { privateMode: boolean }) {
                   </label>
                 </div>
               );
-            })}
+          })}
         </div>
         <div className="content-actions">
           <SubmitButton pending={save.isPending} children="保存该月预算" />
