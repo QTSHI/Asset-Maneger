@@ -14,7 +14,7 @@ describe("account hierarchy", () => {
   it("keeps standalone accounts as their own platform", () => {
     expect(parseAccountHierarchy("Trading212")).toEqual({
       platformName: "Trading212",
-      channelName: "Trading212",
+      channelName: "主账户",
     });
   });
 });

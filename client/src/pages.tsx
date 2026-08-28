@@ -26,7 +26,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "./api";
-import { platformName } from "./accountHierarchy";
+import { parseAccountHierarchy, platformName } from "./accountHierarchy";
 import { consolidateInstruments } from "./instrumentConsolidation";
 import {
   currentMonth,
@@ -250,13 +250,20 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
       <PageHead
         eyebrow="Asset intelligence"
         title="家庭资产"
-        description="先看资产是什么，再看它分布在哪些账户。"
+        description="先看资产类别，再按平台、子账户或购买渠道进入具体持仓。"
         action={
           <button className="primary-button" onClick={() => setEditing("new")}>
             <Plus size={16} /> 添加资产
           </button>
         }
       />
+      <div className="account-hierarchy-guide" aria-label="资产账户层级">
+        <div><b>1</b><span>平台</span><strong>支付宝、Trading212</strong></div>
+        <ChevronRight size={16} />
+        <div><b>2</b><span>子账户 / 购买渠道</span><strong>基金、余额宝、主账户</strong></div>
+        <ChevronRight size={16} />
+        <div><b>3</b><span>持仓</span><strong>具体基金、股票或现金</strong></div>
+      </div>
       <div className="summary-strip">
         <div>
           <span>当前资产</span>
@@ -297,7 +304,7 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
               setSelectedGroup(null);
             }}
           >
-            按账户平台
+            按平台
           </button>
         </div>
         <label className="search-box">
@@ -362,7 +369,7 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
         <section className="asset-group selected-detail">
           <div className="detail-head">
             <div>
-              <span>{view === "class" ? "资产类别" : "账户平台"}</span>
+              <span>{view === "class" ? "资产类别" : "平台"}</span>
               <h3>{selected.label}</h3>
               <p>{selected.assets.length} 项资产 · {money(selected.value, privateMode)}</p>
             </div>
@@ -420,7 +427,7 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
               <thead>
                 <tr>
                   <th>资产</th>
-                  <th>账户</th>
+                  <th>子账户 / 渠道</th>
                   <th>类型</th>
                   <th>单位现价</th>
                   <th>市值</th>
@@ -441,7 +448,10 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
                         </span>
                       )}
                     </td>
-                    <td data-label="账户">{asset.accountName}</td>
+                    <td data-label="子账户 / 渠道">
+                      {parseAccountHierarchy(asset.accountName).channelName}
+                      <small>{parseAccountHierarchy(asset.accountName).platformName}</small>
+                    </td>
                     <td data-label="类型"><span className="tag">{asset.subtypeLabel}</span></td>
                     <td data-label="单位现价">
                       {asset.currentPrice == null ? (
@@ -574,7 +584,7 @@ function AssetForm({
           <input name="name" defaultValue={asset?.name} />
         </label>
         <label>
-          <span>账户</span>
+          <span>子账户 / 购买渠道</span>
           <select name="platform_id" defaultValue={asset?.accountId} required>
             {meta.accounts.map((x) => (
               <option value={x.id} key={x.id}>
@@ -1931,13 +1941,20 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
       <PageHead
         eyebrow="Unified accounts"
         title="家庭账户"
-        description="资产平台和家庭收支账户使用同一套账户体系。"
+        description="先按平台汇总，再进入子账户或购买渠道查看具体持仓。"
         action={
           <button className="primary-button" onClick={() => setOpen(true)}>
             <Plus size={16} /> 添加账户
           </button>
         }
       />
+      <div className="account-hierarchy-guide compact" aria-label="账户组织层级">
+        <div><b>1</b><span>平台</span><strong>统一汇总入口</strong></div>
+        <ChevronRight size={16} />
+        <div><b>2</b><span>子账户 / 购买渠道</span><strong>平台内的资金位置</strong></div>
+        <ChevronRight size={16} />
+        <div><b>3</b><span>持仓</span><strong>具体资产项目</strong></div>
+      </div>
       <div className="account-card-grid">
         {platformGroups.map((platform) => (
           <button
@@ -1954,7 +1971,7 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
               </span>
               <h3>{platform.name}</h3>
               <p>
-                {platform.accounts.length} 个账户 · {platform.assets.length} 项资产
+                {platform.accounts.length} 个子账户 / 渠道 · {platform.assets.length} 项持仓
               </p>
             </div>
             <strong>{money(platform.value, privateMode)}</strong>
@@ -1966,10 +1983,10 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
         <section className="content-panel no-padding selected-detail">
           <div className="detail-head">
             <div>
-              <span>平台明细</span>
+              <span>平台</span>
               <h3>{selected.name}</h3>
               <p>
-                {selected.accounts.map((account) => account.name).join("、")} · {money(selected.value, privateMode)}
+                子账户 / 渠道：{selected.accounts.map((account) => parseAccountHierarchy(account.name).channelName).join("、")} · {money(selected.value, privateMode)}
               </p>
             </div>
             <button className="secondary-button" onClick={() => setSelectedPlatform(null)}>收起明细</button>
@@ -1980,7 +1997,7 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
                 <thead>
                   <tr>
                     <th>资产</th>
-                    <th>账户</th>
+                    <th>子账户 / 渠道</th>
                     <th>类别</th>
                     <th>市值</th>
                     <th>盈亏</th>
@@ -1993,7 +2010,10 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
                     .map((asset) => (
                       <tr key={asset.id}>
                         <td data-label="资产"><strong>{asset.name}</strong><small>{asset.code}</small></td>
-                        <td data-label="账户">{asset.accountName}</td>
+                        <td data-label="子账户 / 渠道">
+                          <strong>{parseAccountHierarchy(asset.accountName).channelName}</strong>
+                          <small>{selected.name} 平台</small>
+                        </td>
                         <td data-label="类别"><span className="tag">{asset.classLabel}</span></td>
                         <td data-label="市值"><strong>{money(asset.marketValueCny, privateMode)}</strong></td>
                         <td data-label="盈亏">
@@ -2069,13 +2089,14 @@ function AccountForm({
     <Modal title="添加家庭账户" onClose={onClose}>
       <form className="form-grid" onSubmit={submit}>
         <label className="span-2">
-          <span>账户名称</span>
+          <span>平台与子账户 / 渠道名称</span>
           <input
             name="name"
             required
             autoFocus
-            placeholder="例如：家庭日常银行卡"
+            placeholder="例如：支付宝 · 基金；独立账户可直接写 Trading212"
           />
+          <small className="field-help">推荐格式：平台 · 子账户/购买渠道。没有下级时只填写平台名。</small>
         </label>
         <label>
           <span>账户类型</span>

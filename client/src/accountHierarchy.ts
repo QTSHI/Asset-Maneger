@@ -11,7 +11,7 @@ export function parseAccountHierarchy(accountName: string): AccountHierarchy {
   const platformName = parts[0] || "未命名平台";
   return {
     platformName,
-    channelName: parts.length > 1 ? parts.slice(1).join(" · ") : platformName,
+    channelName: parts.length > 1 ? parts.slice(1).join(" · ") : "主账户",
   };
 }
 
