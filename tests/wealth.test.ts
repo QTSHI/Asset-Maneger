@@ -54,6 +54,14 @@ describe('asset classification', () => {
     expect(priceFetcher.normalizeEastmoneyStockPrice({ data: { f43: '-' } })).toBeNull();
   });
 
+  it('selects the latest available historical fund NAV on or before the record date', () => {
+    expect(priceFetcher.normalizeHistoricalFundPrice({ Data: { LSJZList: [
+      { FSRQ: '2026-07-27', DWJZ: '1.9795' },
+      { FSRQ: '2026-07-26', DWJZ: '1.9500' },
+    ] } }, '2026-07-27')).toBe(1.9795);
+    expect(priceFetcher.normalizeHistoricalFundPrice({ Data: { LSJZList: [] } }, '2026-07-27')).toBeNull();
+  });
+
   it('maps Trading212 ETFs and stocks without treating unknown instruments as cash', () => {
     expect(trading212.typeForInstrument({ type: 'ETF', ticker: 'VUSA_GB_EQ', currencyCode: 'GBP' })).toBe('etf');
     expect(trading212.typeForInstrument({ type: 'EQUITY', ticker: 'AAPL_US_EQ', currencyCode: 'USD' })).toBe('stock_us');
@@ -68,7 +76,7 @@ describe('asset classification', () => {
 
 describe('Stone Wealth data model', () => {
   it('applies migrations and seeds household categories', () => {
-    expect(db.prepare('SELECT COUNT(*) count FROM schema_migrations').get().count).toBeGreaterThanOrEqual(4);
+    expect(db.prepare('SELECT COUNT(*) count FROM schema_migrations').get().count).toBeGreaterThanOrEqual(5);
     expect(db.prepare('SELECT COUNT(*) count FROM household_categories').get().count).toBeGreaterThan(5);
     const columns = db.prepare('PRAGMA table_info(assets)').all().map((row: any) => row.name);
     expect(columns).toEqual(expect.arrayContaining([
@@ -120,6 +128,9 @@ describe('Stone Wealth data model', () => {
     expect(wealth.isMarketRefreshCandidate({
       code: 'AAPL', quote_code: 'AAPL', asset_type_name: 'stock_us', external_source: 'trading212',
     })).toBe(false);
+    expect(wealth.quoteTypeForAsset({
+      quote_code: '009478', asset_type_name: '纸黄金', external_source: 'manual_import',
+    })).toBe('fund');
   });
 
   it('uses one valuation service for class and account totals', () => {
@@ -164,7 +175,7 @@ describe('Stone Wealth data model', () => {
     db.prepare("DELETE FROM quote_cache WHERE cache_key = 'TEST-FUND_fund'").run();
   });
 
-  it('preserves a legacy imported position value until quantity-based valuation is enabled', () => {
+  it('uses a live quote and quantity instead of a spreadsheet position value', () => {
     const cny = db.prepare("SELECT id FROM currencies WHERE code='CNY'").get().id;
     const fundType = db.prepare("SELECT id FROM asset_types WHERE name='fund'").get().id;
     const account = db.prepare("SELECT id FROM platforms WHERE name='Test Bank'").get().id;
@@ -176,27 +187,46 @@ describe('Stone Wealth data model', () => {
     `).run('LEGACY-POSITION', 'Legacy Position', 50, 2, fundType, account, cny);
     db.prepare(`
       INSERT INTO quote_cache (cache_key, code, asset_type, price, currency_code, source, status)
-      VALUES ('LEGACY-POSITION_fund', 'LEGACY-POSITION', 'fund', 125, 'CNY', 'manual-import', 'fresh')
+      VALUES ('001234_fund', '001234', 'fund', 3, 'CNY', 'market-provider', 'fresh')
     `).run();
 
     const valued = wealth.valueAssets().find((row: any) => row.id === Number(asset.lastInsertRowid));
     expect(valued).toMatchObject({
-      currentPrice: null,
-      marketValueCny: 125,
+      currentPrice: 3,
+      marketValueCny: 150,
       costValueCny: 100,
       quantityStatus: 'estimated',
       valuationMode: 'position_value',
-      valuationBasis: 'imported_position',
-      quote: { status: 'static' },
+      valuationBasis: 'unit_price',
+      quote: { status: 'fresh' },
       dataQuality: {
         status: 'attention',
-        label: '静态持仓估值',
-        issues: expect.arrayContaining(['estimated_quantity', 'static_valuation']),
+        label: '份额为估算值',
+        issues: expect.arrayContaining(['estimated_quantity']),
       },
     });
 
     db.prepare('DELETE FROM assets WHERE id = ?').run(Number(asset.lastInsertRowid));
-    db.prepare("DELETE FROM quote_cache WHERE cache_key = 'LEGACY-POSITION_fund'").run();
+    db.prepare("DELETE FROM quote_cache WHERE cache_key = '001234_fund'").run();
+  });
+
+  it('keeps an unidentifiable spreadsheet position as reference only', () => {
+    const cny = db.prepare("SELECT id FROM currencies WHERE code='CNY'").get().id;
+    const fundType = db.prepare("SELECT id FROM asset_types WHERE name='fund'").get().id;
+    const account = db.prepare("SELECT id FROM platforms WHERE name='Test Bank'").get().id;
+    const inserted = db.prepare(`
+      INSERT INTO assets (
+        code, name, shares, cost_price, asset_type_id, platform_id, currency_id,
+        external_source, valuation_mode, quantity_status, imported_market_value, imported_cost_value
+      ) VALUES ('NO-CODE-POSITION', 'No code position', 1, 100, ?, ?, ?, 'manual_import', 'position_value', 'missing', 125, 100)
+    `).run(fundType, account, cny);
+    const valued = wealth.valueAssets().find((row: any) => row.id === Number(inserted.lastInsertRowid));
+    expect(valued).toMatchObject({
+      currentPrice: null, marketValueCny: 0, costValueCny: 0,
+      importedMarketValue: 125, valuationBasis: 'reference_only',
+      dataQuality: { status: 'blocked', label: '缺少行情代码' },
+    });
+    db.prepare('DELETE FROM assets WHERE id = ?').run(Number(inserted.lastInsertRowid));
   });
 
   it('deletes a household transaction through the API and removes it from the month list', async () => {

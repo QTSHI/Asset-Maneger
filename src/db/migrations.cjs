@@ -358,6 +358,22 @@ const migrations = [
         `).run(cny.id);
       }
     }
+  },
+  {
+    version: '005_live_imported_valuations',
+    run(db) {
+      // Spreadsheet market values are point-in-time references. Positions with
+      // a usable code and quantity must always be valued from cached API quotes.
+      db.exec(`
+        UPDATE assets
+        SET valuation_mode = 'units', updated_at = CURRENT_TIMESTAMP
+        WHERE external_source = 'manual_import'
+          AND archived_at IS NULL
+          AND quantity_status <> 'missing'
+          AND shares > 0
+          AND NULLIF(quote_code, '') IS NOT NULL;
+      `);
+    }
   }
 ];
 

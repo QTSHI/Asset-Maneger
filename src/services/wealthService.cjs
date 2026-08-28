@@ -1,6 +1,6 @@
 const Decimal = require('decimal.js');
 const db = require('./database.cjs');
-const { getPrice, updateExchangeRates, getExchangeRates } = require('./priceFetcher.cjs');
+const { getPrice, getHistoricalFundPrice, updateExchangeRates, getExchangeRates } = require('./priceFetcher.cjs');
 
 const CLASS_META = {
   cash: { code: 'cash', label: '现金与现金等价物', shortLabel: '现金', color: '#0f766e' },
@@ -56,6 +56,13 @@ function getActiveAssets() {
            c.code AS currency_code, at.name AS asset_type_name,
            COALESCE(at.asset_class_code, 'unclassified') AS asset_class_code,
            COALESCE(at.asset_subtype_code, 'unclassified') AS asset_subtype_code,
+           CASE
+             WHEN a.external_source = 'manual_import'
+              AND at.name IN ('纸黄金', 'gold_paper')
+              AND length(COALESCE(a.quote_code, '')) = 6
+             THEN 'fund'
+             ELSE at.name
+           END AS quote_asset_type,
            live_q.price AS live_price,
            imported_q.price AS imported_price,
            COALESCE(live_q.price, imported_q.price) AS cached_price,
@@ -68,10 +75,18 @@ function getActiveAssets() {
     JOIN asset_types at ON at.id = a.asset_type_id
     LEFT JOIN currencies c ON c.id = a.currency_id
     LEFT JOIN quote_cache live_q
-      ON live_q.cache_key = COALESCE(NULLIF(a.quote_code, ''), a.code) || '_' || at.name
+      ON live_q.cache_key = COALESCE(NULLIF(a.quote_code, ''), a.code) || '_' ||
+        CASE
+          WHEN a.external_source = 'manual_import'
+           AND at.name IN ('纸黄金', 'gold_paper')
+           AND length(COALESCE(a.quote_code, '')) = 6
+          THEN 'fund'
+          ELSE at.name
+        END
      AND (a.external_source IS NULL OR a.external_source <> 'manual_import' OR NULLIF(a.quote_code, '') IS NOT NULL)
     LEFT JOIN quote_cache imported_q
       ON imported_q.cache_key = a.code || '_' || at.name
+     AND (a.external_source IS NULL OR a.external_source <> 'manual_import')
     WHERE a.archived_at IS NULL AND p.archived_at IS NULL
     ORDER BY a.id DESC
   `).all();
@@ -84,30 +99,36 @@ function valueAssets() {
     const rate = rates[currency] || 1;
     const isCash = asset.asset_type_name === 'cash' || String(asset.code).startsWith('CASH-');
     const isAggregateT212 = asset.code === 'T212-TOTAL';
-    const usesImportedPosition = asset.valuation_mode === 'position_value';
+    const usesImportedPosition = isAggregateT212 && asset.valuation_mode === 'position_value';
     const currentPrice = isCash || isAggregateT212
       ? 1
-      : usesImportedPosition
-        ? (asset.live_price == null ? null : Number(asset.live_price))
-        : Number(asset.cached_price ?? asset.cost_price ?? 0);
+      : asset.cached_price == null
+        ? null
+        : Number(asset.cached_price);
     const classCode = isAggregateT212 ? 'unclassified' : (asset.asset_class_code || 'unclassified');
     const subtypeCode = isAggregateT212 ? 'unclassified' : (asset.asset_subtype_code || 'unclassified');
+    const hasQuantity = isCash || isAggregateT212 || (
+      asset.quantity_status !== 'missing' && Number(asset.shares) > 0
+    );
+    const referenceOnly = !isCash && !isAggregateT212 && (!hasQuantity || currentPrice == null);
     const marketOriginal = usesImportedPosition
       ? new Decimal(asset.imported_market_value ?? 0)
-      : new Decimal(asset.shares || 0).times(currentPrice || 0);
+      : referenceOnly
+        ? new Decimal(0)
+        : new Decimal(asset.shares || 0).times(currentPrice || 0);
     const costOriginal = usesImportedPosition
       ? new Decimal(asset.imported_cost_value ?? 0)
-      : new Decimal(asset.shares || 0).times(asset.cost_price || 0);
+      : referenceOnly
+        ? new Decimal(0)
+        : new Decimal(asset.shares || 0).times(asset.cost_price || 0);
     const marketCny = marketOriginal.times(rate);
     const costCny = costOriginal.times(rate);
     const profitCny = marketCny.minus(costCny);
     const profitPercent = costCny.gt(0) ? profitCny.div(costCny).times(100) : new Decimal(0);
 
     const rawQuoteStatus = isCash ? 'fresh' : (asset.quote_status || 'missing');
-    const quoteStatus = usesImportedPosition && asset.live_price == null && asset.quote_source === 'manual-import'
-      ? 'static'
-      : rawQuoteStatus;
-    const dataQuality = getAssetDataQuality(asset, quoteStatus, usesImportedPosition);
+    const quoteStatus = rawQuoteStatus;
+    const dataQuality = getAssetDataQuality(asset, quoteStatus, usesImportedPosition, referenceOnly);
 
     return {
       id: asset.id,
@@ -122,7 +143,7 @@ function valueAssets() {
       importedMarketValue: asset.imported_market_value == null ? null : money(asset.imported_market_value),
       importedCostValue: asset.imported_cost_value == null ? null : money(asset.imported_cost_value),
       valuationAsOf: asset.valuation_as_of || null,
-      valuationBasis: usesImportedPosition ? 'imported_position' : 'unit_price',
+      valuationBasis: usesImportedPosition ? 'imported_position' : referenceOnly ? 'reference_only' : 'unit_price',
       currency,
       rateToCny: precise(rate),
       marketValue: money(marketOriginal),
@@ -151,7 +172,7 @@ function valueAssets() {
   });
 }
 
-function getAssetDataQuality(asset, quoteStatus, usesImportedPosition = asset.valuation_mode === 'position_value') {
+function getAssetDataQuality(asset, quoteStatus, usesImportedPosition = false, referenceOnly = false) {
   const issues = [];
   const investmentClass = ['fund', 'stock', 'alternative'].includes(asset.asset_class_code);
   if (asset.external_source === 'manual_import' && ['fund', 'stock'].includes(asset.asset_class_code) && !asset.quote_code) {
@@ -160,6 +181,7 @@ function getAssetDataQuality(asset, quoteStatus, usesImportedPosition = asset.va
   if (investmentClass && asset.quantity_status === 'missing') issues.push('missing_quantity');
   if (investmentClass && asset.quantity_status === 'estimated') issues.push('estimated_quantity');
   if (usesImportedPosition) issues.push('static_valuation');
+  if (referenceOnly && asset.external_source === 'manual_import') issues.push('reference_only');
   if (['missing', 'error'].includes(quoteStatus)) issues.push('missing_quote');
   if (quoteStatus === 'stale') issues.push('stale_quote');
 
@@ -168,6 +190,7 @@ function getAssetDataQuality(asset, quoteStatus, usesImportedPosition = asset.va
   let label = '数据完整';
   if (issues.includes('missing_quote_code')) label = '缺少行情代码';
   else if (issues.includes('missing_quantity')) label = '缺少持仓份额';
+  else if (issues.includes('reference_only')) label = '仅保留历史参考';
   else if (issues.includes('static_valuation')) label = '静态持仓估值';
   else if (issues.includes('stale_quote')) label = '行情已过期';
   else if (issues.includes('estimated_quantity')) label = '份额为估算值';
@@ -555,6 +578,7 @@ async function refreshMarket() {
   marketStatus = { state: 'running', startedAt: new Date().toISOString(), finishedAt: null, updated: 0, failed: 0, message: null };
 
   try {
+    await repairImportedQuantities();
     await updateExchangeRates();
     const rates = getExchangeRates();
     const rateRows = [
@@ -585,15 +609,15 @@ async function refreshMarket() {
     for (let index = 0; index < refreshableAssets.length; index += 5) {
       const batch = refreshableAssets.slice(index, index + 5);
       const results = await Promise.all(batch.map(async (asset) => {
-        const price = await getPrice({ code: quoteCodeForAsset(asset), type: asset.asset_type_name });
+        const price = await getPrice({ code: quoteCodeForAsset(asset), type: quoteTypeForAsset(asset) });
         return { asset, price };
       }));
       for (const { asset, price } of results) {
         const success = Number(price) > 0;
         upsertQuote.run(
-          `${quoteCodeForAsset(asset)}_${asset.asset_type_name}`,
+          `${quoteCodeForAsset(asset)}_${quoteTypeForAsset(asset)}`,
           quoteCodeForAsset(asset),
-          asset.asset_type_name,
+          quoteTypeForAsset(asset),
           success ? Number(price) : null,
           asset.currency_code || 'CNY',
           'market-provider',
@@ -631,10 +655,71 @@ function quoteCodeForAsset(asset) {
   return String(asset.quote_code || asset.code || '').trim();
 }
 
+function quoteTypeForAsset(asset) {
+  if (asset.quote_asset_type) return asset.quote_asset_type;
+  if (
+    asset.external_source === 'manual_import' &&
+    ['纸黄金', 'gold_paper'].includes(asset.asset_type_name) &&
+    /^\d{6}$/.test(String(asset.quote_code || ''))
+  ) return 'fund';
+  return asset.asset_type_name;
+}
+
+async function repairImportedQuantities() {
+  db.prepare(`
+    UPDATE assets
+    SET valuation_mode = 'units', updated_at = CURRENT_TIMESTAMP
+    WHERE external_source = 'manual_import'
+      AND archived_at IS NULL
+      AND quantity_status <> 'missing'
+      AND shares > 0
+      AND NULLIF(quote_code, '') IS NOT NULL
+  `).run();
+
+  const candidates = getActiveAssets().filter((asset) =>
+    asset.external_source === 'manual_import' &&
+    asset.quantity_status === 'missing' &&
+    Number(asset.imported_market_value) > 0 &&
+    Boolean(asset.valuation_as_of) &&
+    Boolean(asset.quote_code) &&
+    ['fund', 'lof'].includes(quoteTypeForAsset(asset))
+  );
+  let repaired = 0;
+  for (const asset of candidates) {
+    const historicalPrice = await getHistoricalFundPrice(
+      quoteCodeForAsset(asset), asset.valuation_as_of
+    );
+    if (!historicalPrice) continue;
+    const shares = new Decimal(asset.imported_market_value).div(historicalPrice);
+    if (!shares.gt(0)) continue;
+    const costPrice = Number(asset.imported_cost_value) > 0
+      ? new Decimal(asset.imported_cost_value).div(shares)
+      : new Decimal(asset.cost_price || 0);
+    const before = { shares: asset.shares, cost_price: asset.cost_price, quantity_status: asset.quantity_status, valuation_mode: asset.valuation_mode };
+    db.prepare(`
+      UPDATE assets
+      SET shares = ?, cost_price = ?, quantity_status = 'estimated',
+          valuation_mode = 'units', updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(precise(shares, 12), precise(costPrice, 12), asset.id);
+    db.prepare(`
+      INSERT INTO audit_log (entity_type, entity_id, action, username, before_json, after_json)
+      VALUES ('asset', ?, 'estimate_quantity_from_historical_nav', 'system:market-refresh', ?, ?)
+    `).run(asset.id, JSON.stringify(before), JSON.stringify({
+      shares: precise(shares, 12), cost_price: precise(costPrice, 12),
+      quantity_status: 'estimated', valuation_mode: 'units',
+      quote_code: quoteCodeForAsset(asset), historical_price: historicalPrice,
+      valuation_as_of: asset.valuation_as_of
+    }));
+    repaired += 1;
+  }
+  return repaired;
+}
+
 function isMarketRefreshCandidate(asset) {
   if (asset.external_source === 'trading212') return false;
   if (asset.external_source === 'manual_import') {
-    return Boolean(asset.quote_code) && ['fund', 'etf', 'lof', 'stock_cn', 'stock_us', 'stock_uk'].includes(asset.asset_type_name);
+    return Boolean(asset.quote_code) && ['fund', 'etf', 'lof', 'stock_cn', 'stock_us', 'stock_uk'].includes(quoteTypeForAsset(asset));
   }
   return Boolean(quoteCodeForAsset(asset));
 }
@@ -659,6 +744,8 @@ module.exports = {
   getStoredRates,
   londonDate,
   quoteCodeForAsset,
+  quoteTypeForAsset,
+  repairImportedQuantities,
   isMarketRefreshCandidate,
   getAssetDataQuality
 };

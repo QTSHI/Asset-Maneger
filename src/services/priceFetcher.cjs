@@ -127,6 +127,35 @@ async function getFundPrice(code) {
     return null;
 }
 
+function normalizeHistoricalFundPrice(payload, targetDate) {
+    const rows = payload?.Data?.LSJZList;
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const eligible = rows
+        .filter((row) => !targetDate || String(row.FSRQ || '') <= targetDate)
+        .sort((a, b) => String(b.FSRQ || '').localeCompare(String(a.FSRQ || '')));
+    const price = Number(eligible[0]?.DWJZ);
+    return Number.isFinite(price) && price > 0 ? price : null;
+}
+
+async function getHistoricalFundPrice(code, targetDate) {
+    if (!/^\d{6}$/.test(String(code || '')) || !/^\d{4}-\d{2}-\d{2}$/.test(String(targetDate || ''))) {
+        return null;
+    }
+    const start = new Date(`${targetDate}T00:00:00Z`);
+    start.setUTCDate(start.getUTCDate() - 10);
+    const startDate = start.toISOString().slice(0, 10);
+    try {
+        const resp = await axios.get('https://api.fund.eastmoney.com/f10/lsjz', {
+            timeout: 10000,
+            headers: { 'Referer': 'https://fundf10.eastmoney.com/', 'User-Agent': 'Mozilla/5.0' },
+            params: { fundCode: code, pageIndex: 1, pageSize: 20, startDate, endDate: targetDate }
+        });
+        return normalizeHistoricalFundPrice(resp.data, targetDate);
+    } catch (e) {
+        return null;
+    }
+}
+
 /**
  * 获取实时国内金价（元/克）
  * 使用黄金ETF 518880价格推算
@@ -192,7 +221,7 @@ async function getPrice(asset) {
         } else if (asset.type === 'etf' || (asset.type === 'fund' && /^[0-9]{6}$/.test(code) && 
             (code.startsWith('51') || code.startsWith('50') || code.startsWith('56') || code.startsWith('15')))) {
             price = await getStockPrice(code);
-        } else if (asset.type === 'fund') {
+        } else if (asset.type === 'fund' || asset.type === 'lof') {
             price = await getFundPrice(code);
         } else if (asset.type === 'stock_cn') {
             price = await getStockPrice(code);
@@ -251,4 +280,12 @@ function convertCurrency(amount, from, to) {
     return amount;
 }
 
-module.exports = { getPrice, updateExchangeRates, getExchangeRates, convertCurrency, normalizeEastmoneyStockPrice };
+module.exports = {
+    getPrice,
+    getHistoricalFundPrice,
+    updateExchangeRates,
+    getExchangeRates,
+    convertCurrency,
+    normalizeEastmoneyStockPrice,
+    normalizeHistoricalFundPrice
+};

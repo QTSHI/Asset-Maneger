@@ -460,10 +460,23 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
                         asset.currentPrice.toLocaleString("zh-CN", { maximumFractionDigits: 6 })
                       )}
                       {asset.valuationBasis === "imported_position" && (
-                        <small>持仓市值沿用导入金额</small>
+                        <small>Trading212 API 汇总备用值</small>
                       )}
                     </td>
-                    <td data-label="市值"><strong>{money(asset.marketValueCny, privateMode)}</strong></td>
+                    <td data-label="市值">
+                      {asset.valuationBasis === "reference_only" ? (
+                        <>
+                          <strong className="muted-value">不计入实时总额</strong>
+                          <small>
+                            {asset.importedMarketValue == null
+                              ? "等待补充代码、数量或行情"
+                              : `历史参考 ${asset.currency} ${asset.importedMarketValue.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}${asset.valuationAsOf ? ` · ${asset.valuationAsOf}` : ""}`}
+                          </small>
+                        </>
+                      ) : (
+                        <strong>{money(asset.marketValueCny, privateMode)}</strong>
+                      )}
+                    </td>
                     <td data-label="盈亏">
                       <span className={asset.profitCny >= 0 ? "positive" : "negative"}>
                         {money(asset.profitCny, privateMode)}
@@ -626,11 +639,9 @@ function AssetForm({
           </select>
         </label>
         <label>
-          <span>估值方式</span>
-          <select name="valuation_mode" defaultValue={asset?.valuationMode || "units"}>
-            <option value="units">单位价格 × 份额</option>
-            <option value="position_value">沿用导入持仓金额</option>
-          </select>
+          <span>当前估值规则</span>
+          <div className="form-readonly-value">API 最新价格 × 份额 / 数量</div>
+          <input type="hidden" name="valuation_mode" value="units" />
         </label>
         <label>
           <span>成本价</span>
@@ -644,7 +655,7 @@ function AssetForm({
           />
         </label>
         <label>
-          <span>导入持仓市值</span>
+          <span>导入时市值（历史参考）</span>
           <input
             name="imported_market_value"
             type="number"
@@ -654,7 +665,7 @@ function AssetForm({
           />
         </label>
         <label>
-          <span>导入持仓成本</span>
+          <span>导入时成本（历史参考）</span>
           <input
             name="imported_cost_value"
             type="number"
@@ -664,7 +675,7 @@ function AssetForm({
           />
         </label>
         <label>
-          <span>估值日期</span>
+          <span>历史参考日期</span>
           <input name="valuation_as_of" type="date" defaultValue={asset?.valuationAsOf || ""} />
         </label>
         <label className="span-2">
