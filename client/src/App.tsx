@@ -472,7 +472,7 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
       <section className="panel reminder-panel">
         <PanelTitle
           title="近期大额事项"
-          subtitle="未来 30 天"
+          subtitle="逾期与未来 30 天"
           action={
             <NavLink
               className="round-button"
@@ -509,7 +509,7 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
           {!data.household.memos.length && (
             <div className="empty-inline">
               <Bell size={20} />
-              <span>未来 30 天没有待处理的大额事项</span>
+              <span>没有逾期或未来 30 天内待处理的大额事项</span>
             </div>
           )}
         </div>
@@ -518,10 +518,12 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
       <div className="data-note">
         <RefreshCw size={14} />
         <span>
-          {data.freshness.staleCount
+          {data.freshness.market.state === "error"
+            ? "行情或汇率更新有异常"
+            : data.freshness.staleCount
             ? `${data.freshness.staleCount} 项行情需要更新`
-            : "资产数据已同步"}{" "}
-          · 更新于{" "}
+            : "行情暂无待更新项"}{" "}
+          · 页面生成于{" "}
           {new Date(data.asOf).toLocaleTimeString("zh-CN", {
             hour: "2-digit",
             minute: "2-digit",
