@@ -34,20 +34,31 @@ function precise(value, places = 8) {
 }
 
 function getStoredRates() {
-  const stored = Object.fromEntries(
-    db.prepare('SELECT currency_code, rate_to_cny FROM exchange_rate_cache').all()
-      .map((row) => [row.currency_code, Number(row.rate_to_cny)])
-  );
+  const rates = { CNY: 1 };
+  for (const row of db.prepare('SELECT currency_code, rate_to_cny FROM exchange_rate_cache').all()) {
+    const rate = Number(row.rate_to_cny);
+    if (row.currency_code !== 'CNY' && Number.isFinite(rate) && rate > 0) {
+      rates[row.currency_code] = rate;
+    }
+  }
   const fallback = getExchangeRates();
-  return {
-    CNY: 1,
-    GBP: stored.GBP || fallback.GBP_TO_CNY || 1,
-    USD: stored.USD || fallback.USD_TO_CNY || 1,
-    EUR: stored.EUR || fallback.EUR_TO_CNY || 1,
-    AED: stored.AED || fallback.AED_TO_CNY || 1,
-    JPY: stored.JPY || fallback.JPY_TO_CNY || 1,
-    HKD: stored.HKD || fallback.HKD_TO_CNY || 0.92
-  };
+  for (const currency of ['GBP', 'USD', 'EUR', 'AED', 'JPY', 'HKD']) {
+    const rate = Number(fallback[`${currency}_TO_CNY`]);
+    if (!(currency in rates) && Number.isFinite(rate) && rate > 0) rates[currency] = rate;
+  }
+  return rates;
+}
+
+function requireRateToCny(currency, rates, purpose) {
+  if (currency === 'CNY') return 1;
+  const rate = rates[currency];
+  if (!Number.isFinite(rate) || rate <= 0) {
+    const error = new Error(`无法计算${purpose}：缺少 ${currency || '未知币种'} 兑人民币的有效汇率，请先更新汇率缓存`);
+    error.status = 422;
+    error.code = 'FX_RATE_UNAVAILABLE';
+    throw error;
+  }
+  return rate;
 }
 
 function getActiveAssets() {
@@ -95,8 +106,8 @@ function getActiveAssets() {
 function valueAssets() {
   const rates = getStoredRates();
   return getActiveAssets().map((asset) => {
-    const currency = asset.currency_code || 'CNY';
-    const rate = rates[currency] || 1;
+    const currency = asset.currency_code || (asset.currency_id == null ? 'CNY' : null);
+    const rate = requireRateToCny(currency, rates, '资产价值');
     const isCash = asset.asset_type_name === 'cash' || String(asset.code).startsWith('CASH-');
     const isAggregateT212 = asset.code === 'T212-TOTAL';
     const usesImportedPosition = isAggregateT212 && asset.valuation_mode === 'position_value';
@@ -116,7 +127,9 @@ function valueAssets() {
       : referenceOnly
         ? new Decimal(0)
         : new Decimal(asset.shares || 0).times(currentPrice || 0);
-    const costOriginal = usesImportedPosition
+    const costOriginal = isCash
+      ? marketOriginal
+      : usesImportedPosition
       ? new Decimal(asset.imported_cost_value ?? 0)
       : referenceOnly
         ? new Decimal(0)
@@ -135,7 +148,7 @@ function valueAssets() {
       code: asset.code,
       name: asset.name || asset.code,
       shares: precise(asset.shares),
-      costPrice: precise(asset.cost_price),
+      costPrice: isCash ? 1 : precise(asset.cost_price),
       currentPrice: currentPrice == null ? null : precise(currentPrice),
       quoteCode: asset.quote_code || null,
       quantityStatus: asset.quantity_status || 'verified',
@@ -143,6 +156,8 @@ function valueAssets() {
       importedMarketValue: asset.imported_market_value == null ? null : money(asset.imported_market_value),
       importedCostValue: asset.imported_cost_value == null ? null : money(asset.imported_cost_value),
       valuationAsOf: asset.valuation_as_of || null,
+      cashConfirmedAt: asset.cash_confirmed_at || null,
+      externalSource: asset.external_source || null,
       valuationBasis: usesImportedPosition ? 'imported_position' : referenceOnly ? 'reference_only' : 'unit_price',
       currency,
       rateToCny: precise(rate),
@@ -403,17 +418,23 @@ function getHouseholdPlan() {
     GROUP BY substr(occurred_on, 1, 7)
   `).all(settings.start_month, settings.end_month).map((row) => [row.month, row]));
 
-  const memos = new Map(db.prepare(`
-    SELECT substr(fm.due_date, 1, 7) AS month,
-           SUM(CASE WHEN fm.kind = 'income' THEN fm.expected_amount * COALESCE(er.rate_to_cny, 1) ELSE 0 END) AS memo_income,
-           SUM(CASE WHEN fm.kind = 'expense' THEN fm.expected_amount * COALESCE(er.rate_to_cny, 1) ELSE 0 END) AS memo_expense
+  const memoRows = db.prepare(`
+    SELECT substr(fm.due_date, 1, 7) AS month, fm.kind, fm.expected_amount, c.code AS currency_code
     FROM financial_memos fm
-    JOIN currencies c ON c.id = fm.currency_id
-    LEFT JOIN exchange_rate_cache er ON er.currency_code = c.code
+    LEFT JOIN currencies c ON c.id = fm.currency_id
     WHERE fm.archived_at IS NULL AND fm.status = 'pending'
       AND substr(fm.due_date, 1, 7) BETWEEN ? AND ?
-    GROUP BY substr(fm.due_date, 1, 7)
-  `).all(settings.start_month, settings.end_month).map((row) => [row.month, row]));
+  `).all(settings.start_month, settings.end_month);
+  const rates = getStoredRates();
+  const memos = new Map();
+  for (const memo of memoRows) {
+    const monthly = memos.get(memo.month) || { memo_income: new Decimal(0), memo_expense: new Decimal(0) };
+    const amountCny = new Decimal(memo.expected_amount)
+      .times(requireRateToCny(memo.currency_code, rates, '大额事项计划'));
+    const key = memo.kind === 'income' ? 'memo_income' : 'memo_expense';
+    monthly[key] = monthly[key].plus(amountCny);
+    memos.set(memo.month, monthly);
+  }
 
   const currentMonth = londonDate().slice(0, 7);
   let balance = new Decimal(settings.opening_amount).times(settings.planning_rate_to_cny);
@@ -538,13 +559,19 @@ function saveDailySnapshot(date = londonDate()) {
   const totalMarket = assets.reduce((sum, asset) => sum.plus(asset.marketValueCny), new Decimal(0));
   const totalCost = assets.reduce((sum, asset) => sum.plus(asset.costValueCny), new Decimal(0));
   const profit = totalMarket.minus(totalCost);
-  const flow = db.prepare(`
-    SELECT COALESCE(SUM(CASE WHEN flow_type IN ('deposit','dividend','interest') THEN amount * er.rate_to_cny ELSE -amount * er.rate_to_cny END), 0) AS value
+  const flows = db.prepare(`
+    SELECT cf.flow_type, cf.amount, c.code AS currency_code
     FROM cash_flows cf
-    JOIN currencies c ON c.id = cf.currency_id
-    LEFT JOIN exchange_rate_cache er ON er.currency_code = c.code
+    LEFT JOIN currencies c ON c.id = cf.currency_id
     WHERE cf.occurred_on = ? AND cf.archived_at IS NULL
-  `).get(date)?.value || 0;
+  `).all(date);
+  const rates = getStoredRates();
+  const flow = flows.reduce((total, row) => {
+    const amountCny = new Decimal(row.amount)
+      .times(requireRateToCny(row.currency_code, rates, '每日资金净流量'));
+    return ['deposit', 'dividend', 'interest'].includes(row.flow_type)
+      ? total.plus(amountCny) : total.minus(amountCny);
+  }, new Decimal(0));
 
   db.prepare(`
     INSERT INTO portfolio_snapshots (snapshot_date, market_value_cny, cost_value_cny, unrealized_profit_cny, net_cash_flow_cny)
@@ -579,18 +606,22 @@ async function refreshMarket() {
 
   try {
     await repairImportedQuantities();
-    await updateExchangeRates();
+    const ratesUpdated = await updateExchangeRates();
     const rates = getExchangeRates();
     const rateRows = [
       ['CNY', 1], ['GBP', rates.GBP_TO_CNY], ['USD', rates.USD_TO_CNY], ['EUR', rates.EUR_TO_CNY],
-      ['AED', rates.AED_TO_CNY], ['JPY', rates.JPY_TO_CNY], ['HKD', rates.HKD_TO_CNY || 0.92]
+      ['AED', rates.AED_TO_CNY], ['JPY', rates.JPY_TO_CNY], ['HKD', rates.HKD_TO_CNY]
     ];
     const upsertRate = db.prepare(`
       INSERT INTO exchange_rate_cache (currency_code, rate_to_cny, status, fetched_at)
       VALUES (?, ?, 'fresh', CURRENT_TIMESTAMP)
       ON CONFLICT(currency_code) DO UPDATE SET rate_to_cny = excluded.rate_to_cny, status = 'fresh', error_message = NULL, fetched_at = CURRENT_TIMESTAMP
     `);
-    for (const [currency, rate] of rateRows) if (rate) upsertRate.run(currency, rate);
+    if (ratesUpdated) {
+      for (const [currency, rate] of rateRows) if (Number.isFinite(rate) && rate > 0) upsertRate.run(currency, rate);
+    } else {
+      db.prepare("UPDATE exchange_rate_cache SET status = 'stale' WHERE currency_code <> 'CNY'").run();
+    }
 
     const assets = getActiveAssets();
     const refreshableAssets = assets.filter(isMarketRefreshCandidate);
@@ -642,7 +673,8 @@ async function refreshMarket() {
       }
     }
     saveDailySnapshot();
-    marketStatus.state = 'success';
+    marketStatus.state = ratesUpdated ? 'success' : 'error';
+    if (!ratesUpdated) marketStatus.message = '汇率更新失败，已保留上次有效汇率';
   } catch (error) {
     marketStatus.state = 'error';
     marketStatus.message = error.message;

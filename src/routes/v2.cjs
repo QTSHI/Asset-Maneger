@@ -33,7 +33,7 @@ function handler(fn) {
     try {
       await fn(req, res);
     } catch (error) {
-      console.error('[api/v2]', error);
+      if (!error.status || error.status >= 500) console.error('[api/v2]', error);
       fail(res, error.status || 500, error.code || 'INTERNAL_ERROR', error.status ? error.message : '服务暂时不可用', error.fields);
     }
   };
@@ -73,8 +73,12 @@ function updateRecord(table, id, values, allowed, user) {
 
 const idSchema = z.coerce.number().int().positive();
 const optionalId = z.coerce.number().int().positive().nullable().optional();
-const dateString = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式应为 YYYY-MM-DD');
-const monthString = z.string().regex(/^\d{4}-\d{2}$/, '月份格式应为 YYYY-MM');
+const dateString = z.string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式应为 YYYY-MM-DD')
+  .refine((value) => !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value, '请输入有效日期');
+const monthString = z.string()
+  .regex(/^\d{4}-\d{2}$/, '月份格式应为 YYYY-MM')
+  .refine((value) => Number(value.slice(5)) >= 1 && Number(value.slice(5)) <= 12, '请输入有效月份');
 
 const assetCreateSchema = z.object({
   platform_id: idSchema,
@@ -138,13 +142,57 @@ router.patch('/assets/:id', handler(async (req, res) => {
   const before = getRecord('assets', id);
   if (!before || before.archived_at) return fail(res, 404, 'NOT_FOUND', '资产不存在');
   const user = username(req);
-  updateRecord('assets', id, input, [
+  const balanceIdentityChanged = [
+    'shares', 'cost_price', 'currency_id', 'platform_id', 'asset_type_id',
+    'valuation_mode', 'imported_market_value', 'imported_cost_value'
+  ]
+    .some((key) => input[key] !== undefined && input[key] !== before[key]);
+  updateRecord('assets', id, balanceIdentityChanged ? { ...input, cash_confirmed_at: null } : input, [
     'platform_id', 'asset_type_id', 'code', 'name', 'shares', 'cost_price', 'currency_id',
     'quote_code', 'quantity_status', 'valuation_mode', 'imported_market_value',
-    'imported_cost_value', 'valuation_as_of', 'updated_by', 'updated_at'
+    'imported_cost_value', 'valuation_as_of', 'cash_confirmed_at', 'updated_by', 'updated_at'
   ], user);
   const after = getRecord('assets', id);
   audit('asset', id, 'update', user, before, after);
+  ok(res, after);
+}));
+
+const cashBalanceSchema = z.object({
+  balance: z.number().finite(),
+  confirmed_on: dateString.refine(
+    (value) => !Number.isNaN(Date.parse(value)) && new Date(value).toISOString().slice(0, 10) === value,
+    '请输入有效的确认日期'
+  )
+});
+
+router.patch('/assets/:id/cash-balance', handler(async (req, res) => {
+  const id = parse(idSchema, req.params.id);
+  const input = parse(cashBalanceSchema, req.body);
+  const before = db.prepare(`
+    SELECT a.*, at.name AS asset_type_name
+    FROM assets a JOIN asset_types at ON at.id = a.asset_type_id
+    WHERE a.id = ?
+  `).get(id);
+  if (!before || before.archived_at) return fail(res, 404, 'NOT_FOUND', '资产不存在');
+  if (before.asset_type_name !== 'cash') {
+    return fail(res, 400, 'NOT_CASH_ASSET', '只有现金类资产可以快捷更新余额');
+  }
+  if (before.external_source === 'trading212') {
+    return fail(res, 409, 'SYNC_MANAGED', '该现金余额由 Trading212 同步，请在数据同步后查看');
+  }
+  const localToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  if (input.confirmed_on > localToday) {
+    return fail(res, 400, 'FUTURE_CONFIRMATION', '余额确认日期不能晚于今天');
+  }
+  const user = username(req);
+  db.prepare(`
+    UPDATE assets
+    SET shares = ?, cost_price = 1, cash_confirmed_at = ?,
+        updated_by = ?, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(input.balance, input.confirmed_on, user, id);
+  const after = getRecord('assets', id);
+  audit('asset', id, 'confirm_cash_balance', user, before, after);
   ok(res, after);
 }));
 
@@ -166,6 +214,7 @@ const accountSchema = z.object({
 });
 
 router.get('/accounts', handler(async (req, res) => {
+  const archivedOnly = req.query.archived === '1';
   const accountValues = new Map();
   for (const asset of wealth.valueAssets()) {
     accountValues.set(asset.accountId, wealth.money((accountValues.get(asset.accountId) || 0) + asset.marketValueCny));
@@ -176,7 +225,7 @@ router.get('/accounts', handler(async (req, res) => {
     FROM platforms p
     LEFT JOIN currencies c ON c.id = p.default_currency_id
     LEFT JOIN assets a ON a.platform_id = p.id
-    WHERE p.archived_at IS NULL
+    WHERE p.archived_at IS ${archivedOnly ? 'NOT NULL' : 'NULL'}
     GROUP BY p.id
     ORDER BY p.name
   `).all().map((account) => ({
@@ -194,6 +243,9 @@ router.get('/accounts', handler(async (req, res) => {
 
 router.post('/accounts', handler(async (req, res) => {
   const input = parse(accountSchema, req.body);
+  if (db.prepare('SELECT 1 FROM platforms WHERE name = ? COLLATE NOCASE').get(input.name)) {
+    return fail(res, 409, 'ACCOUNT_NAME_EXISTS', '账户名称已存在，请使用不同名称');
+  }
   const user = username(req);
   const result = db.prepare(`
     INSERT INTO platforms (name, account_type, default_currency_id, category, created_by, updated_by, updated_at)
@@ -211,6 +263,9 @@ router.patch('/accounts/:id', handler(async (req, res) => {
   const input = parse(accountSchema.partial(), req.body);
   const before = getRecord('platforms', id);
   if (!before || before.archived_at) return fail(res, 404, 'NOT_FOUND', '账户不存在');
+  if (input.name && db.prepare('SELECT 1 FROM platforms WHERE name = ? COLLATE NOCASE AND id <> ?').get(input.name, id)) {
+    return fail(res, 409, 'ACCOUNT_NAME_EXISTS', '账户名称已存在，请使用不同名称');
+  }
   const user = username(req);
   updateRecord('platforms', id, input, ['name', 'account_type', 'default_currency_id', 'category', 'updated_by', 'updated_at'], user);
   const after = getRecord('platforms', id);
@@ -228,6 +283,17 @@ router.delete('/accounts/:id', handler(async (req, res) => {
   db.prepare('UPDATE platforms SET archived_at = CURRENT_TIMESTAMP, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, id);
   audit('account', id, 'archive', user, before, getRecord('platforms', id));
   res.status(204).end();
+}));
+
+router.post('/accounts/:id/restore', handler(async (req, res) => {
+  const id = parse(idSchema, req.params.id);
+  const before = getRecord('platforms', id);
+  if (!before || !before.archived_at) return fail(res, 404, 'NOT_FOUND', '已归档账户不存在');
+  const user = username(req);
+  db.prepare('UPDATE platforms SET archived_at = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, id);
+  const after = getRecord('platforms', id);
+  audit('account', id, 'restore', user, before, after);
+  ok(res, after);
 }));
 
 router.get('/asset-classes', handler(async (_req, res) => {
@@ -278,6 +344,12 @@ const householdPlanSettingsSchema = z.object({
   end_month: monthString
 }).refine((value) => value.start_month <= value.end_month, {
   message: '结束月份不能早于开始月份', path: ['end_month']
+}).refine((value) => {
+  const [startYear, startMonth] = value.start_month.split('-').map(Number);
+  const [endYear, endMonth] = value.end_month.split('-').map(Number);
+  return (endYear - startYear) * 12 + endMonth - startMonth < 120;
+}, {
+  message: '规划区间最多支持 120 个月', path: ['end_month']
 });
 
 router.get('/household/plan', handler(async (_req, res) => {
@@ -286,9 +358,15 @@ router.get('/household/plan', handler(async (_req, res) => {
 
 router.put('/household/plan/settings', handler(async (req, res) => {
   const input = parse(householdPlanSettingsSchema, req.body);
+  const currency = db.prepare('SELECT code FROM currencies WHERE id = ?').get(input.opening_currency_id);
+  if (!currency) return fail(res, 400, 'INVALID_CURRENCY', '期初金额币种不存在');
+  if (currency.code === 'CNY' && input.planning_rate_to_cny !== 1) {
+    return fail(res, 400, 'INVALID_FX_RATE', '人民币规划汇率必须为 1');
+  }
   const user = username(req);
-  const before = db.prepare('SELECT * FROM household_plan_settings WHERE id = 1').get();
-  db.prepare(`
+  const plan = db.transaction(() => {
+    const before = db.prepare('SELECT * FROM household_plan_settings WHERE id = 1').get();
+    db.prepare(`
     INSERT INTO household_plan_settings (
       id, opening_amount, opening_currency_id, planning_rate_to_cny,
       start_month, end_month, created_by, updated_by, updated_at
@@ -301,13 +379,15 @@ router.put('/household/plan/settings', handler(async (req, res) => {
       end_month = excluded.end_month,
       updated_by = excluded.updated_by,
       updated_at = CURRENT_TIMESTAMP
-  `).run(
-    input.opening_amount, input.opening_currency_id, input.planning_rate_to_cny,
-    input.start_month, input.end_month, user, user
-  );
-  const after = db.prepare('SELECT * FROM household_plan_settings WHERE id = 1').get();
-  audit('household_plan_settings', 1, 'update', user, before, after);
-  ok(res, wealth.getHouseholdPlan());
+    `).run(
+      input.opening_amount, input.opening_currency_id, input.planning_rate_to_cny,
+      input.start_month, input.end_month, user, user
+    );
+    const after = db.prepare('SELECT * FROM household_plan_settings WHERE id = 1').get();
+    audit('household_plan_settings', 1, 'update', user, before, after);
+    return wealth.getHouseholdPlan();
+  })();
+  ok(res, plan);
 }));
 
 router.put('/household/budgets', handler(async (req, res) => {
@@ -357,6 +437,32 @@ const transactionPatchSchema = transactionSchema.partial().extend({
   linked_action: z.enum(['sync', 'unlink']).optional()
 });
 
+function transactionRate(currencyCode, suppliedRate, priorRate) {
+  if (currencyCode === 'CNY') {
+    if (suppliedRate !== undefined && suppliedRate !== 1) {
+      const error = new Error('人民币记账汇率必须为 1');
+      error.status = 400;
+      error.code = 'INVALID_FX_RATE';
+      throw error;
+    }
+    return 1;
+  }
+  if (suppliedRate !== undefined) return suppliedRate;
+  if (priorRate !== undefined && priorRate !== null) return priorRate;
+  const cached = db.prepare('SELECT rate_to_cny FROM exchange_rate_cache WHERE currency_code = ?').get(currencyCode)?.rate_to_cny;
+  const rate = Number(cached) || wealth.getStoredRates()[currencyCode];
+  if (Number.isFinite(rate) && rate > 0 && (Number(cached) > 0 || rate !== 1)) return rate;
+  const error = new Error(`缺少 ${currencyCode} 兑人民币汇率，请填写记账汇率`);
+  error.status = 400;
+  error.code = 'FX_RATE_REQUIRED';
+  throw error;
+}
+
+function validTransactionCategory(categoryId, kind) {
+  const category = db.prepare('SELECT kind FROM household_categories WHERE id = ? AND archived_at IS NULL').get(categoryId);
+  return category?.kind === kind;
+}
+
 function transactionList(query = {}) {
   const conditions = ['ht.archived_at IS NULL'];
   const params = [];
@@ -385,7 +491,10 @@ router.post('/household/transactions', handler(async (req, res) => {
   const input = parse(transactionSchema, req.body);
   const currency = db.prepare('SELECT code FROM currencies WHERE id = ?').get(input.currency_id);
   if (!currency) return fail(res, 400, 'INVALID_CURRENCY', '币种不存在');
-  const rate = input.fx_rate_to_cny || wealth.getStoredRates()[currency.code] || 1;
+  if (!validTransactionCategory(input.category_id, input.kind)) {
+    return fail(res, 400, 'INVALID_CATEGORY', '分类与收支类型不匹配');
+  }
+  const rate = transactionRate(currency.code, input.fx_rate_to_cny);
   const amountCny = wealth.money(input.amount * rate);
   const user = username(req);
   const result = db.prepare(`
@@ -409,21 +518,35 @@ router.patch('/household/transactions/:id', handler(async (req, res) => {
   }
   const merged = { ...before, ...input };
   const currency = db.prepare('SELECT code FROM currencies WHERE id = ?').get(merged.currency_id);
-  const rate = input.fx_rate_to_cny || (input.currency_id ? wealth.getStoredRates()[currency.code] : before.fx_rate_to_cny) || 1;
+  if (!currency) return fail(res, 400, 'INVALID_CURRENCY', '币种不存在');
+  if (!validTransactionCategory(merged.category_id, merged.kind)) {
+    return fail(res, 400, 'INVALID_CATEGORY', '分类与收支类型不匹配');
+  }
+  if (before.linked_cash_flow_id && input.linked_action === 'sync' && !merged.account_id) {
+    return fail(res, 400, 'ACCOUNT_REQUIRED', '同步资产资金流前，请先选择账户');
+  }
+  const rate = transactionRate(
+    currency.code,
+    input.fx_rate_to_cny,
+    input.currency_id && input.currency_id !== before.currency_id ? undefined : before.fx_rate_to_cny
+  );
   input.fx_rate_to_cny = rate;
   input.amount_cny = wealth.money(merged.amount * rate);
   const user = username(req);
-  updateRecord('household_transactions', id, input, ['kind', 'amount', 'currency_id', 'fx_rate_to_cny', 'amount_cny', 'category_id', 'account_id', 'project_id', 'occurred_on', 'note', 'updated_by', 'updated_at'], user);
-  let after = getRecord('household_transactions', id);
-  if (before.linked_cash_flow_id && input.linked_action === 'sync') {
-    db.prepare(`UPDATE cash_flows SET amount = ?, currency_id = ?, account_id = ?, occurred_on = ?, note = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
-      .run(after.amount, after.currency_id, after.account_id, after.occurred_on, after.note, user, before.linked_cash_flow_id);
-  } else if (before.linked_cash_flow_id && input.linked_action === 'unlink') {
-    db.prepare('UPDATE cash_flows SET archived_at = CURRENT_TIMESTAMP, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, before.linked_cash_flow_id);
-    db.prepare('UPDATE household_transactions SET linked_cash_flow_id = NULL WHERE id = ?').run(id);
-  }
-  after = getRecord('household_transactions', id);
-  audit('household_transaction', id, 'update', user, before, after);
+  let after;
+  db.transaction(() => {
+    updateRecord('household_transactions', id, input, ['kind', 'amount', 'currency_id', 'fx_rate_to_cny', 'amount_cny', 'category_id', 'account_id', 'project_id', 'occurred_on', 'note', 'updated_by', 'updated_at'], user);
+    after = getRecord('household_transactions', id);
+    if (before.linked_cash_flow_id && input.linked_action === 'sync') {
+      db.prepare(`UPDATE cash_flows SET flow_type = ?, amount = ?, currency_id = ?, account_id = ?, occurred_on = ?, note = ?, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        .run(after.kind === 'income' ? 'deposit' : 'withdrawal', after.amount, after.currency_id, after.account_id, after.occurred_on, after.note, user, before.linked_cash_flow_id);
+    } else if (before.linked_cash_flow_id && input.linked_action === 'unlink') {
+      db.prepare('UPDATE cash_flows SET source_transaction_id = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, before.linked_cash_flow_id);
+      db.prepare('UPDATE household_transactions SET linked_cash_flow_id = NULL WHERE id = ?').run(id);
+    }
+    after = getRecord('household_transactions', id);
+    audit('household_transaction', id, 'update', user, before, after);
+  })();
   ok(res, after);
 }));
 
@@ -478,7 +601,7 @@ router.delete('/household/transactions/:id/cash-flow-link', handler(async (req, 
   if (!transaction || !transaction.linked_cash_flow_id) return fail(res, 404, 'NOT_LINKED', '该记录没有关联资金流');
   const user = username(req);
   db.transaction(() => {
-    db.prepare('UPDATE cash_flows SET archived_at = CURRENT_TIMESTAMP, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, transaction.linked_cash_flow_id);
+    db.prepare('UPDATE cash_flows SET source_transaction_id = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, transaction.linked_cash_flow_id);
     db.prepare('UPDATE household_transactions SET linked_cash_flow_id = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, id);
   })();
   audit('household_transaction', id, 'unlink_cash_flow', user, transaction, getRecord('household_transactions', id));
@@ -566,13 +689,19 @@ router.post('/household/memos/:id/complete', handler(async (req, res) => {
   }), req.body || {});
   const categoryId = input.category_id || memo.category_id;
   if (input.create_transaction && !categoryId) return fail(res, 400, 'CATEGORY_REQUIRED', '生成实际收支前需要选择分类');
+  if (input.create_transaction && !validTransactionCategory(categoryId, memo.kind)) {
+    return fail(res, 400, 'INVALID_CATEGORY', '分类与收入或支出类型不匹配');
+  }
+  const currency = input.create_transaction
+    ? db.prepare('SELECT code FROM currencies WHERE id = ?').get(memo.currency_id)
+    : null;
+  if (input.create_transaction && !currency) return fail(res, 400, 'INVALID_CURRENCY', '备忘币种不存在');
+  const rate = input.create_transaction ? transactionRate(currency.code, input.fx_rate_to_cny) : null;
   const user = username(req);
   let transactionId = null;
   let cashFlowId = null;
   db.transaction(() => {
     if (input.create_transaction) {
-      const currency = db.prepare('SELECT code FROM currencies WHERE id = ?').get(memo.currency_id);
-      const rate = input.fx_rate_to_cny || wealth.getStoredRates()[currency?.code] || 1;
       const transaction = db.prepare(`
         INSERT INTO household_transactions (kind, amount, currency_id, fx_rate_to_cny, amount_cny, category_id, account_id, occurred_on, note, created_by, updated_by)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)

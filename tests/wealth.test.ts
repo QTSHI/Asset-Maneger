@@ -76,12 +76,12 @@ describe('asset classification', () => {
 
 describe('Stone Wealth data model', () => {
   it('applies migrations and seeds household categories', () => {
-    expect(db.prepare('SELECT COUNT(*) count FROM schema_migrations').get().count).toBeGreaterThanOrEqual(5);
+    expect(db.prepare('SELECT COUNT(*) count FROM schema_migrations').get().count).toBeGreaterThanOrEqual(6);
     expect(db.prepare('SELECT COUNT(*) count FROM household_categories').get().count).toBeGreaterThan(5);
     const columns = db.prepare('PRAGMA table_info(assets)').all().map((row: any) => row.name);
     expect(columns).toEqual(expect.arrayContaining([
       'quote_code', 'quantity_status', 'valuation_mode', 'imported_market_value',
-      'imported_cost_value', 'valuation_as_of',
+      'imported_cost_value', 'valuation_as_of', 'cash_confirmed_at',
     ]));
   });
 
@@ -249,5 +249,102 @@ describe('Stone Wealth data model', () => {
     const payload = await response.json();
     expect(payload.data.some((row: any) => row.id === id)).toBe(false);
     expect(db.prepare('SELECT archived_at FROM household_transactions WHERE id = ?').get(id).archived_at).toBeTruthy();
+  });
+
+  it('edits and archives an existing account without changing its identity', async () => {
+    const cny = db.prepare("SELECT id FROM currencies WHERE code='CNY'").get().id;
+    const created = await fetch(`${apiBaseUrl}/accounts`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Maintenance account', account_type: 'bank', default_currency_id: cny }),
+    });
+    expect(created.status).toBe(201);
+    const account = (await created.json()).data;
+    const updated = await fetch(`${apiBaseUrl}/accounts/${account.id}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Maintenance account · savings', account_type: 'cash' }),
+    });
+    expect(updated.status).toBe(200);
+    expect((await updated.json()).data).toMatchObject({ id: account.id, name: 'Maintenance account · savings', account_type: 'cash' });
+
+    const duplicate = await fetch(`${apiBaseUrl}/accounts`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Maintenance account · savings', account_type: 'cash', default_currency_id: cny }),
+    });
+    expect(duplicate.status).toBe(409);
+    expect((await duplicate.json()).error.code).toBe('ACCOUNT_NAME_EXISTS');
+
+    const archived = await fetch(`${apiBaseUrl}/accounts/${account.id}`, { method: 'DELETE' });
+    expect(archived.status).toBe(204);
+    expect(db.prepare('SELECT archived_at FROM platforms WHERE id = ?').get(account.id).archived_at).toBeTruthy();
+    expect(db.prepare('SELECT COUNT(*) count FROM platforms WHERE id = ?').get(account.id).count).toBe(1);
+
+    const archivedList = await fetch(`${apiBaseUrl}/accounts?archived=1`);
+    expect((await archivedList.json()).data.some((row: any) => row.id === account.id)).toBe(true);
+    const restored = await fetch(`${apiBaseUrl}/accounts/${account.id}/restore`, { method: 'POST' });
+    expect(restored.status).toBe(200);
+    expect((await restored.json()).data).toMatchObject({ id: account.id, archived_at: null });
+  });
+
+  it('confirms cash balance on the same asset without adding a second position', async () => {
+    const cny = db.prepare("SELECT id FROM currencies WHERE code='CNY'").get().id;
+    const cashType = db.prepare("SELECT id FROM asset_types WHERE name='cash'").get().id;
+    const fundType = db.prepare("SELECT id FROM asset_types WHERE name='fund'").get().id;
+    const accountId = Number(db.prepare("INSERT INTO platforms (name, account_type) VALUES ('Balance test account', 'bank')").run().lastInsertRowid);
+    const cashId = Number(db.prepare(`
+      INSERT INTO assets (code, name, shares, cost_price, asset_type_id, platform_id, currency_id)
+      VALUES ('CASH-BALANCE-TEST', 'Balance test cash', 100, 1, ?, ?, ?)
+    `).run(cashType, accountId, cny).lastInsertRowid);
+    const fundId = Number(db.prepare(`
+      INSERT INTO assets (code, name, shares, cost_price, asset_type_id, platform_id, currency_id)
+      VALUES ('FUND-BALANCE-TEST', 'Balance test fund', 1, 10, ?, ?, ?)
+    `).run(fundType, accountId, cny).lastInsertRowid);
+    const beforeCount = db.prepare('SELECT COUNT(*) count FROM assets WHERE platform_id = ?').get(accountId).count;
+
+    const archiveWithAssets = await fetch(`${apiBaseUrl}/accounts/${accountId}`, { method: 'DELETE' });
+    expect(archiveWithAssets.status).toBe(409);
+    expect(db.prepare('SELECT archived_at FROM platforms WHERE id = ?').get(accountId).archived_at).toBeNull();
+
+    const rejected = await fetch(`${apiBaseUrl}/assets/${fundId}/cash-balance`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ balance: 900, confirmed_on: '2026-09-01' }),
+    });
+    expect(rejected.status).toBe(400);
+
+    db.prepare("UPDATE assets SET external_source = 'trading212' WHERE id = ?").run(cashId);
+    const syncManaged = await fetch(`${apiBaseUrl}/assets/${cashId}/cash-balance`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ balance: 900, confirmed_on: '2026-09-01' }),
+    });
+    expect(syncManaged.status).toBe(409);
+    db.prepare('UPDATE assets SET external_source = NULL WHERE id = ?').run(cashId);
+
+    const confirmed = await fetch(`${apiBaseUrl}/assets/${cashId}/cash-balance`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ balance: 120.35, confirmed_on: '2026-09-01' }),
+    });
+    expect(confirmed.status).toBe(200);
+    expect((await confirmed.json()).data).toMatchObject({ id: cashId, shares: 120.35, cash_confirmed_at: '2026-09-01' });
+    expect(db.prepare('SELECT COUNT(*) count FROM assets WHERE platform_id = ?').get(accountId).count).toBe(beforeCount);
+    expect(wealth.valueAssets().find((row: any) => row.id === cashId)).toMatchObject({
+      marketValueCny: 120.35, costValueCny: 120.35, cashConfirmedAt: '2026-09-01',
+    });
+    const accounts = await fetch(`${apiBaseUrl}/accounts`);
+    const account = (await accounts.json()).data.find((row: any) => row.id === accountId);
+    expect(account.market_value_cny).toBe(120.35);
+
+    // A negative cash balance represents an overdraft and reduces total wealth.
+    const overdraft = await fetch(`${apiBaseUrl}/assets/${cashId}/cash-balance`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ balance: -25.5, confirmed_on: '2026-09-02' }),
+    });
+    expect(overdraft.status).toBe(200);
+    expect(wealth.valueAssets().find((row: any) => row.id === cashId).marketValueCny).toBe(-25.5);
+
+    const editedElsewhere = await fetch(`${apiBaseUrl}/assets/${cashId}`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ cost_price: 0.99 }),
+    });
+    expect(editedElsewhere.status).toBe(200);
+    expect((await editedElsewhere.json()).data.cash_confirmed_at).toBeNull();
   });
 });

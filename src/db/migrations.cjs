@@ -374,6 +374,14 @@ const migrations = [
           AND NULLIF(quote_code, '') IS NOT NULL;
       `);
     }
+  },
+  {
+    version: '006_cash_balance_confirmation',
+    run(db) {
+      // Existing cash balances have not been explicitly checked by the user.
+      // Keep this null until a deliberate balance confirmation occurs.
+      ensureColumn(db, 'assets', 'cash_confirmed_at DATETIME');
+    }
   }
 ];
 

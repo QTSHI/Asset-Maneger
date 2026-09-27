@@ -349,7 +349,26 @@ app.get('/snapshot', async (req, res) => {
 
 app.post('/refresh-rates', async (req, res) => {
     try {
-        await updateExchangeRates();
+        const updated = await updateExchangeRates();
+        if (!updated) {
+            return res.status(503).json({ error: '汇率服务暂时不可用，已保留上次有效汇率' });
+        }
+        const rates = getExchangeRates();
+        const entries = [
+            ['CNY', 1], ['GBP', rates.GBP_TO_CNY], ['USD', rates.USD_TO_CNY],
+            ['EUR', rates.EUR_TO_CNY], ['AED', rates.AED_TO_CNY],
+            ['JPY', rates.JPY_TO_CNY], ['HKD', rates.HKD_TO_CNY]
+        ];
+        const saveRate = db.prepare(`
+            INSERT INTO exchange_rate_cache (currency_code, rate_to_cny, status, fetched_at)
+            VALUES (?, ?, 'fresh', CURRENT_TIMESTAMP)
+            ON CONFLICT(currency_code) DO UPDATE SET
+              rate_to_cny = excluded.rate_to_cny,
+              status = 'fresh', error_message = NULL, fetched_at = CURRENT_TIMESTAMP
+        `);
+        db.transaction(() => {
+            for (const [currency, rate] of entries) saveRate.run(currency, rate);
+        })();
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -369,6 +388,12 @@ app.listen(PORT, LISTEN_HOST, () => {
         : `✅ 已集成SSO认证 (${SSO_BASE_URL})`);
     setInterval(updateExchangeRates, EXCHANGE_RATE_INTERVAL);
     setInterval(() => wealthService.refreshMarket(), 30 * 60 * 1000);
-    setInterval(() => wealthService.saveDailySnapshot(), 60 * 60 * 1000);
+    setInterval(() => {
+        try {
+            wealthService.saveDailySnapshot();
+        } catch (error) {
+            console.error('每日资产快照保存失败:', error);
+        }
+    }, 60 * 60 * 1000);
     setTimeout(() => wealthService.refreshMarket(), 1500);
 });
