@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Route, Routes, useLocation } from "react-router-dom";
 import {
   Cell,
   Pie,
@@ -18,6 +18,7 @@ import {
   Landmark,
   LayoutDashboard,
   Moon,
+  MoreHorizontal,
   PiggyBank,
   RefreshCw,
   Settings2,
@@ -27,26 +28,122 @@ import {
 import { api } from "./api";
 import { currentMonth, MonthNavigator, monthLabel } from "./dateControls";
 import type { DashboardData } from "./types";
-import {
-  AccountsPage,
-  AssetsPage,
-  BudgetPage,
-  PlansPage,
-  StatusPage,
-  TransactionsPage,
-} from "./pages";
+
+const loadPages = () => import("./pages");
+const AccountsPage = lazy(() =>
+  loadPages().then(({ AccountsPage }) => ({ default: AccountsPage })),
+);
+const AssetsPage = lazy(() =>
+  loadPages().then(({ AssetsPage }) => ({ default: AssetsPage })),
+);
+const BudgetPage = lazy(() =>
+  loadPages().then(({ BudgetPage }) => ({ default: BudgetPage })),
+);
+const PlansPage = lazy(() =>
+  loadPages().then(({ PlansPage }) => ({ default: PlansPage })),
+);
+const StatusPage = lazy(() =>
+  loadPages().then(({ StatusPage }) => ({ default: StatusPage })),
+);
+const TransactionsPage = lazy(() =>
+  loadPages().then(({ TransactionsPage }) => ({ default: TransactionsPage })),
+);
 
 const nav = [
-  { label: "总览", icon: LayoutDashboard, path: "/" },
-  { label: "资产", icon: Landmark, path: "/assets" },
-  { label: "家庭预算", icon: PiggyBank, path: "/budget" },
-  { label: "收支记录", icon: WalletCards, path: "/transactions" },
-  { label: "计划与提醒", icon: Bell, path: "/plans" },
-  { label: "账户", icon: CircleDollarSign, path: "/accounts" },
-  { label: "数据状态", icon: Gauge, path: "/status" },
+  { label: "总览", mobileLabel: "总览", icon: LayoutDashboard, path: "/" },
+  { label: "资产", mobileLabel: "资产", icon: Landmark, path: "/assets" },
+  { label: "家庭预算", mobileLabel: "预算", icon: PiggyBank, path: "/budget" },
+  {
+    label: "收支记录",
+    mobileLabel: "收支",
+    icon: WalletCards,
+    path: "/transactions",
+  },
+  { label: "计划与提醒", mobileLabel: "计划", icon: Bell, path: "/plans" },
+  { label: "账户", mobileLabel: "账户", icon: CircleDollarSign, path: "/accounts" },
+  { label: "数据状态", mobileLabel: "状态", icon: Gauge, path: "/status" },
 ];
 
+function MobileNavigation() {
+  const { pathname } = useLocation();
+  const [moreOpen, setMoreOpen] = useState(false);
+  const navRef = useRef<HTMLElement>(null);
+  const moreButtonRef = useRef<HTMLButtonElement>(null);
+  const activeMorePage = nav.slice(5).find((item) => item.path === pathname);
+
+  useEffect(() => setMoreOpen(false), [pathname]);
+  useEffect(() => {
+    if (!moreOpen) return;
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMoreOpen(false);
+        moreButtonRef.current?.focus();
+      }
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      if (
+        event.target instanceof Node &&
+        !navRef.current?.contains(event.target)
+      ) {
+        setMoreOpen(false);
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+      document.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [moreOpen]);
+
+  return (
+    <nav className="mobile-nav" aria-label="移动端导航" ref={navRef}>
+      {nav.slice(0, 5).map((item) => (
+        <NavLink
+          className={({ isActive }) => (isActive ? "active" : "")}
+          end={item.path === "/"}
+          to={item.path}
+          key={item.label}
+        >
+          <item.icon size={20} aria-hidden="true" />
+          <span>{item.mobileLabel}</span>
+        </NavLink>
+      ))}
+      <button
+        ref={moreButtonRef}
+        type="button"
+        className={`mobile-more-trigger${activeMorePage ? " active" : ""}`}
+        aria-controls="mobile-more-panel"
+        aria-expanded={moreOpen}
+        aria-label={activeMorePage ? `更多页面，当前是${activeMorePage.label}` : "更多页面"}
+        onClick={() => setMoreOpen((open) => !open)}
+      >
+        <MoreHorizontal size={20} aria-hidden="true" />
+        <span>更多</span>
+      </button>
+      <div className="mobile-more-panel" id="mobile-more-panel" hidden={!moreOpen}>
+        <span className="mobile-more-title">更多页面</span>
+        {nav.slice(5).map((item) => (
+          <NavLink
+            className={({ isActive }) => (isActive ? "active" : "")}
+            to={item.path}
+            key={item.label}
+            onClick={() => setMoreOpen(false)}
+          >
+            <item.icon size={19} aria-hidden="true" />
+            <span>{item.label}</span>
+            <ChevronRight size={17} aria-hidden="true" />
+          </NavLink>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
 function App() {
+  const hour = new Date().getHours();
+  const greeting = hour < 5 || hour >= 19 ? "晚上好" : hour < 11 ? "早上好" : hour < 14 ? "中午好" : "下午好";
   const [theme, setTheme] = useState(
     () => localStorage.getItem("stone-theme") || "light",
   );
@@ -101,7 +198,7 @@ function App() {
         <header className="topbar">
           <div>
             <span className="eyebrow">家庭财务驾驶舱</span>
-            <h1>早上好，欢迎回家</h1>
+            <h1>{greeting}，欢迎回家</h1>
           </div>
           <div className="top-actions">
             <button
@@ -120,44 +217,34 @@ function App() {
             </button>
           </div>
         </header>
-        <Routes>
-          <Route path="/" element={<Dashboard privateMode={privateMode} />} />
-          <Route
-            path="/assets"
-            element={<AssetsPage privateMode={privateMode} />}
-          />
-          <Route
-            path="/budget"
-            element={<BudgetPage privateMode={privateMode} />}
-          />
-          <Route
-            path="/transactions"
-            element={<TransactionsPage privateMode={privateMode} />}
-          />
-          <Route
-            path="/plans"
-            element={<PlansPage privateMode={privateMode} />}
-          />
-          <Route
-            path="/accounts"
-            element={<AccountsPage privateMode={privateMode} />}
-          />
-          <Route path="/status" element={<StatusPage />} />
-        </Routes>
+        <Suspense fallback={<div className="state-card" role="status">正在加载页面…</div>}>
+          <Routes>
+            <Route path="/" element={<Dashboard privateMode={privateMode} />} />
+            <Route
+              path="/assets"
+              element={<AssetsPage privateMode={privateMode} />}
+            />
+            <Route
+              path="/budget"
+              element={<BudgetPage privateMode={privateMode} />}
+            />
+            <Route
+              path="/transactions"
+              element={<TransactionsPage privateMode={privateMode} />}
+            />
+            <Route
+              path="/plans"
+              element={<PlansPage privateMode={privateMode} />}
+            />
+            <Route
+              path="/accounts"
+              element={<AccountsPage privateMode={privateMode} />}
+            />
+            <Route path="/status" element={<StatusPage />} />
+          </Routes>
+        </Suspense>
       </main>
-      <nav className="mobile-nav" aria-label="移动端导航">
-        {nav.slice(0, 5).map((item) => (
-          <NavLink
-            className={({ isActive }) => (isActive ? "active" : "")}
-            end={item.path === "/"}
-            to={item.path}
-            key={item.label}
-          >
-            <item.icon size={20} />
-            <span>{item.label.replace("家庭", "")}</span>
-          </NavLink>
-        ))}
-      </nav>
+      <MobileNavigation />
     </div>
   );
 }
@@ -170,12 +257,12 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
   });
   const data = query.data;
 
-  const currency = (value: number, compact = false) =>
+  const currency = (value: number, compact = false, currencyCode = "CNY") =>
     privateMode
       ? "••••••"
       : new Intl.NumberFormat("zh-CN", {
           style: "currency",
-          currency: "CNY",
+          currency: currencyCode,
           maximumFractionDigits: compact ? 0 : 2,
           notation:
             compact && Math.abs(value) >= 1_000_000 ? "compact" : "standard",
@@ -210,6 +297,9 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
   );
   const unclassified = data.allocations.byClass.find(
     (item) => item.code === "unclassified",
+  );
+  const plannedExpenseCategories = data.household.budgets.filter(
+    (item) => item.kind === "expense" && item.planned > 0,
   );
 
   return (
@@ -318,9 +408,13 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
           title="家庭预算"
           subtitle={data.household.month.replace("-", " 年 ") + " 月"}
           action={
-            <button className="text-button">
+            <NavLink
+              className="text-button"
+              to="/budget"
+              style={{ textDecoration: "none" }}
+            >
               管理预算 <ChevronRight size={15} />
-            </button>
+            </NavLink>
           }
         />
         <div className="budget-summary">
@@ -341,19 +435,16 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
           />
         </div>
         <div className="budget-categories">
-          {data.household.budgets
-            .filter((x) => x.kind === "expense")
-            .slice(0, 4)
-            .map((item) => (
-              <div key={item.id}>
-                <i style={{ background: item.color }} />
-                <span>{item.categoryName}</span>
-                <strong>
-                  {currency(item.actual, true)} / {currency(item.planned, true)}
-                </strong>
-              </div>
-            ))}
-          {!data.household.budgets.length && (
+          {plannedExpenseCategories.slice(0, 4).map((item) => (
+            <div key={item.id}>
+              <i style={{ background: item.color }} />
+              <span>{item.categoryName}</span>
+              <strong>
+                {currency(item.actual, true)} / {currency(item.planned, true)}
+              </strong>
+            </div>
+          ))}
+          {!plannedExpenseCategories.length && (
             <div className="empty-inline">
               <PiggyBank size={20} />
               <span>还没有预算，先为这个月做个轻量计划</span>
@@ -383,9 +474,13 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
           title="近期大额事项"
           subtitle="未来 30 天"
           action={
-            <button className="round-button" aria-label="查看大额事项提醒">
+            <NavLink
+              className="round-button"
+              to="/plans"
+              aria-label="查看大额事项提醒"
+            >
               <Bell size={16} />
-            </button>
+            </NavLink>
           }
         />
         <div className="memo-list">
@@ -407,7 +502,7 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
               </div>
               <b>
                 {memo.kind === "expense" ? "-" : "+"}
-                {currency(memo.expected_amount, true)}
+                {currency(memo.expected_amount, true, memo.currency_code)}
               </b>
             </div>
           ))}

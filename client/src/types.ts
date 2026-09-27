@@ -26,6 +26,8 @@ export interface ValuedAsset {
   importedMarketValue?: number | null;
   importedCostValue?: number | null;
   valuationAsOf?: string | null;
+  cashConfirmedAt?: string | null;
+  externalSource?: string | null;
   valuationBasis: "unit_price" | "imported_position" | "reference_only";
   currency: string;
   marketValueCny: number;
