@@ -9,6 +9,8 @@ import {
   Tooltip,
 } from "recharts";
 import {
+  Check,
+  ChevronRight,
   CircleDollarSign,
   Eye,
   EyeOff,
@@ -188,6 +190,11 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
     queryFn: () => api.get<DashboardData>("/dashboard"),
   });
   const data = query.data;
+  const accountsQuery = useQuery({
+    queryKey: ["accounts"],
+    queryFn: () => api.get<Array<{ id: number }>>("/accounts"),
+    enabled: data?.totals.assetCount === 0,
+  });
 
   const currency = (value: number, compact = false, currencyCode = "CNY") =>
     privateMode
@@ -209,6 +216,50 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
         <button onClick={() => query.refetch()}>重新加载</button>
       </div>
     );
+
+  if (data.totals.assetCount === 0 && accountsQuery.isPending)
+    return <DashboardSkeleton />;
+  if (data.totals.assetCount === 0 && accountsQuery.isError)
+    return (
+      <div className="state-card">
+        <strong>暂时无法读取账户</strong>
+        <span>{accountsQuery.error.message}</span>
+        <button onClick={() => accountsQuery.refetch()}>重新加载</button>
+      </div>
+    );
+
+  if (data.totals.assetCount === 0) {
+    const hasAccount = (accountsQuery.data?.length || 0) > 0;
+    return (
+      <section className="first-use-panel" aria-labelledby="first-use-title">
+        <span className="first-use-eyebrow">建立你的家庭资产台账</span>
+        <h2 id="first-use-title">
+          {hasAccount ? "账户已准备好，录入第一项资产" : "先添加一个账户，再录入资产"}
+        </h2>
+        <p>
+          {hasAccount
+            ? "可以从一笔现金、基金或股票开始。保存后，总览会根据真实记录生成。"
+            : "账户代表资产所在的位置，例如银行、支付宝或证券平台。这里暂时没有资产记录。"}
+        </p>
+        <div className="first-use-steps" aria-label="首次使用步骤">
+          <div className={hasAccount ? "done" : "current"}>
+            <b>{hasAccount ? <Check size={16} aria-label="已完成" /> : "1"}</b>
+            <strong>添加账户</strong>
+            <span>填写平台或子账户名称</span>
+          </div>
+          <div className={hasAccount ? "current" : "upcoming"}>
+            <b>2</b>
+            <strong>录入第一项资产</strong>
+            <span>填写数量、成本和币种</span>
+          </div>
+        </div>
+        <NavLink className="primary-button" to={hasAccount ? "/assets" : "/accounts"}>
+          {hasAccount ? "去添加资产" : "去添加账户"}
+          <ChevronRight size={16} aria-hidden="true" />
+        </NavLink>
+      </section>
+    );
+  }
 
   const classCards = ["cash", "fund", "stock", "alternative"].map(
     (code) =>
@@ -237,6 +288,10 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
           <div>
             <span>家庭总资产</span>
             <strong>{currency(data.totals.marketValueCny)}</strong>
+            <small className="hero-data-note">
+              页面生成于 {new Date(data.asOf).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              {" · "}{data.freshness.staleCount} 项行情待关注
+            </small>
           </div>
           <span className="live-pill">
             <i /> CNY 基准

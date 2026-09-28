@@ -117,6 +117,17 @@ describe('Stone Wealth data model', () => {
     expect(wealth.londonDate(new Date('2026-08-27T23:30:00Z'))).toBe('2026-08-28');
   });
 
+  it('counts an empty active account in the household dashboard', () => {
+    const accountId = Number(db.prepare("INSERT INTO platforms (name, account_type) VALUES ('New Empty Account', 'bank')").run().lastInsertRowid);
+    try {
+      expect(wealth.getDashboard().totals).toMatchObject({ accountCount: 1, assetCount: 0 });
+      db.prepare('UPDATE platforms SET archived_at = CURRENT_TIMESTAMP WHERE id = ?').run(accountId);
+      expect(wealth.getDashboard().totals.accountCount).toBe(0);
+    } finally {
+      db.prepare('DELETE FROM platforms WHERE id = ?').run(accountId);
+    }
+  });
+
   it('refreshes imported instruments only when they have a real quote code', () => {
     expect(wealth.quoteCodeForAsset({ code: 'SQT-XLSX-9', quote_code: '000218' })).toBe('000218');
     expect(wealth.isMarketRefreshCandidate({

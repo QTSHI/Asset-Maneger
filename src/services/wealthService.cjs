@@ -543,7 +543,7 @@ function getDashboard({ range } = {}) {
       profitCny: money(totalProfit),
       profitPercent: totalCost.gt(0) ? money(totalProfit.div(totalCost).times(100)) : 0,
       assetCount: assets.length,
-      accountCount: new Set(assets.map((asset) => asset.accountId)).size
+      accountCount: db.prepare('SELECT COUNT(*) AS count FROM platforms WHERE archived_at IS NULL').get().count
     },
     allocations: { byClass: classAllocation, byAccount: accountAllocation },
     trend: getTrend(range),

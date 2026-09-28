@@ -1,5 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { NavLink } from "react-router-dom";
 import {
   AlertCircle,
   ArrowDownLeft,
@@ -176,16 +177,19 @@ function EmptyState({
   icon,
   title,
   text,
+  action,
 }: {
   icon: ReactNode;
   title: string;
   text: string;
+  action?: ReactNode;
 }) {
   return (
     <div className="empty-state-page">
       {icon}
       <strong>{title}</strong>
       <span>{text}</span>
+      {action}
     </div>
   );
 }
@@ -305,6 +309,8 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
     },
   });
   const total = filtered.reduce((sum, asset) => sum + asset.marketValueCny, 0);
+  const isFirstAsset = assets.data?.length === 0;
+  const needsAccount = meta.data?.accounts.length === 0;
 
   return (
     <div className="page-stack">
@@ -312,12 +318,32 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
         eyebrow="Asset intelligence"
         title="家庭资产"
         description="先看资产类别，再按平台、子账户或购买渠道进入具体持仓。"
-        action={
-          <button className="primary-button" onClick={() => setEditing("new")}>
-            <Plus size={16} /> 添加资产
-          </button>
-        }
+        action={!isFirstAsset && (needsAccount
+          ? <NavLink className="primary-button" to="/accounts"><Plus size={16} /> 先添加账户</NavLink>
+          : <button className="primary-button" onClick={() => setEditing("new")} disabled={!meta.data}>
+              <Plus size={16} /> 添加资产
+            </button>)}
       />
+      {meta.error && (
+        <p className="form-error" role="alert">
+          无法加载账户和资产类型：{meta.error.message}{" "}
+          <button className="link-button" onClick={() => meta.refetch()}>重新加载</button>
+        </p>
+      )}
+      {isFirstAsset ? (
+        <EmptyState
+          icon={<Landmark />}
+          title={needsAccount ? "先添加一个账户" : "还没有资产"}
+          text={needsAccount
+            ? "资产需要归属到银行、证券平台或其他账户。先建账户，再录入第一项资产。"
+            : "从一笔现金、基金或股票开始，录入后就能在总览查看真实资产。"}
+          action={needsAccount
+            ? <NavLink className="primary-button" to="/accounts"><Plus size={16} /> 去添加账户</NavLink>
+            : <button className="primary-button" onClick={() => setEditing("new")} disabled={!meta.data}>
+                <Plus size={16} /> 添加第一项资产
+              </button>}
+        />
+      ) : <>
       <div className="account-hierarchy-guide" aria-label="资产账户层级">
         <div><b>1</b><span>平台</span><strong>支付宝、Trading212</strong></div>
         <ChevronRight size={16} />
@@ -585,11 +611,12 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
           <EmptyState
             icon={<Landmark />}
             title="没有匹配的资产"
-            text="调整搜索条件，或添加第一项资产。"
+            text="试试其他名称、代码或账户关键词。"
           />
         )}
       </div>
-      {editing && meta.data && (
+      </>}
+      {editing && meta.data && meta.data.accounts.length > 0 && (
         <AssetForm
           asset={editing === "new" ? undefined : editing}
           meta={meta.data}
@@ -663,8 +690,9 @@ function AssetForm({
     <Modal title={asset ? "编辑资产" : "添加资产"} onClose={onClose}>
       <form className="form-grid" onSubmit={submit}>
         <label>
-          <span>内部资产编号</span>
-          <input name="code" defaultValue={asset?.code} required />
+          <span>自定义资产编号</span>
+          <input name="code" defaultValue={asset?.code} required placeholder="例如 CASH-CNY-001" />
+          <small className="field-help">用于区分持仓，给每项资产填一个不重复的编号。</small>
         </label>
         <label>
           <span>行情代码</span>
@@ -711,6 +739,7 @@ function AssetForm({
             defaultValue={asset?.shares}
             required
           />
+          <small className="field-help">现金填当前余额；基金或股票填持有数量。</small>
         </label>
         <label>
           <span>份额可信度</span>
@@ -735,6 +764,7 @@ function AssetForm({
             defaultValue={asset?.costPrice}
             required
           />
+          <small className="field-help">现金填 1；其他资产填每份或每股成本。</small>
         </label>
         <label>
           <span>导入时市值（历史参考）</span>
@@ -766,6 +796,7 @@ function AssetForm({
             name="currency_id"
             defaultValue={
               meta.currencies.find((x) => x.code === asset?.currency)?.id
+              ?? meta.currencies.find((x) => x.code === "CNY")?.id
             }
             required
           >
@@ -1377,6 +1408,15 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
           </div>
         }
       />
+      {(query.data?.length || 0) > 0 && assets.data?.length === 0 && (
+        <section className="first-use-next" aria-label="下一步：录入资产">
+          <div>
+            <strong>账户已建好，下一步录入第一项资产</strong>
+            <p>可以从一笔现金、基金或股票开始；资产会归属到刚建好的账户。</p>
+          </div>
+          <NavLink className="primary-button" to="/assets">去添加资产 <ChevronRight size={16} aria-hidden="true" /></NavLink>
+        </section>
+      )}
       <div className="account-hierarchy-guide compact" aria-label="账户组织层级">
         <div><b>1</b><span>平台</span><strong>统一汇总入口</strong></div>
         <ChevronRight size={16} />
@@ -1516,7 +1556,8 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
         <EmptyState
           icon={<CircleDollarSign />}
           title="还没有账户"
-          text="添加银行、投资、钱包或现金账户。"
+          text="先添加一个银行、投资、钱包或现金账户，再录入第一项资产。"
+          action={<button className="primary-button" onClick={() => setEditingAccount("new")}>添加第一个账户</button>}
         />
       )}
       {showArchived && (
@@ -1557,6 +1598,7 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
             client.invalidateQueries({ queryKey: ["accounts"] });
             client.invalidateQueries({ queryKey: ["meta"] });
             client.invalidateQueries({ queryKey: ["assets"] });
+            client.invalidateQueries({ queryKey: ["dashboard"] });
           }}
         />
       )}

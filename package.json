@@ -12,6 +12,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "backup": "node scripts/backup-database.cjs",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test && npm run build"
   },

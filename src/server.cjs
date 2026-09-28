@@ -8,6 +8,25 @@ const path = require('path');
 const https = require('https');
 const fs = require('fs');
 
+const IS_DEVELOPMENT = process.env.NODE_ENV === 'development';
+
+// The preview bypasses SSO, so it must never open the production database.
+if (IS_DEVELOPMENT) {
+    const configuredPath = process.env.ASSET_TRACKER_DB_PATH;
+    const resolveDatabasePath = (value) => {
+        const absolute = path.resolve(process.cwd(), value);
+        if (fs.existsSync(absolute)) return fs.realpathSync(absolute);
+        const parent = path.dirname(absolute);
+        return fs.existsSync(parent)
+            ? path.join(fs.realpathSync(parent), path.basename(absolute))
+            : absolute;
+    };
+    const productionPath = path.join(__dirname, '../database.sqlite');
+    if (!configuredPath?.trim() || resolveDatabasePath(configuredPath) === resolveDatabasePath(productionPath)) {
+        throw new Error('本地预览必须设置独立的 ASSET_TRACKER_DB_PATH，不能使用正式 database.sqlite');
+    }
+}
+
 const db = require('./services/database.cjs');
 const { updateExchangeRates, getPrice, getExchangeRates, convertCurrency } = require('./services/priceFetcher.cjs');
 const wealthService = require('./services/wealthService.cjs');
@@ -18,7 +37,6 @@ const { PORT, EXCHANGE_RATE_INTERVAL } = require('./config/constants.cjs');
 
 const SSO_BASE_URL = 'https://stoneking.top';
 const SERVICE_NAME = 'asset-tracker';
-const IS_DEVELOPMENT = process.env.NODE_ENV === 'development';
 
 const API_PATHS = ['/asset-types', '/currencies', '/platforms', '/assets', '/snapshot', '/refresh-rates', '/exchange-rates', '/login-token', '/summary-by-currency', '/login'];
 
@@ -222,15 +240,13 @@ app.get('/platforms', (req, res) => {
     res.json(db.prepare('SELECT * FROM platforms').all());
 });
 
-app.post('/platforms', (req, res) => {
-    const { name, category, default_currency_id } = req.body;
-    try {
-        const result = db.prepare('INSERT INTO platforms (name, category, default_currency_id) VALUES (?, ?, ?)').run(name, category || '投资类', default_currency_id);
-        res.json({ success: true, id: result.lastInsertRowid });
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
-});
+function legacyWriteRetired(_req, res) {
+    res.status(410).json({
+        error: { code: 'LEGACY_WRITE_RETIRED', message: '旧版写入接口已停用，请使用 /api/v2' }
+    });
+}
+
+app.post('/platforms', legacyWriteRetired);
 
 app.get('/assets', (req, res) => {
     const assets = db.prepare(`
@@ -245,37 +261,9 @@ app.get('/assets', (req, res) => {
     res.json(assets);
 });
 
-app.post('/assets', (req, res) => {
-    const { platform_id, asset_type_id, code, name, shares, cost_price, currency_id } = req.body;
-    try {
-        const result = db.prepare(`
-            INSERT INTO assets (platform_id, asset_type_id, code, name, shares, cost_price, currency_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(platform_id, asset_type_id, code, name, shares, cost_price, currency_id);
-        res.json({ success: true, id: result.lastInsertRowid });
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
-});
-
-app.delete('/assets/:id', (req, res) => {
-    db.prepare('DELETE FROM assets WHERE id = ?').run(req.params.id);
-    res.json({ success: true });
-});
-
-app.put('/assets/:id', (req, res) => {
-    const { platform_id, asset_type_id, code, name, shares, cost_price, currency_id } = req.body;
-    try {
-        db.prepare(`
-            UPDATE assets 
-            SET platform_id = ?, asset_type_id = ?, code = ?, name = ?, shares = ?, cost_price = ?, currency_id = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        `).run(platform_id, asset_type_id, code, name, shares, cost_price, currency_id, req.params.id);
-        res.json({ success: true });
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
-});
+app.post('/assets', legacyWriteRetired);
+app.delete('/assets/:id', legacyWriteRetired);
+app.put('/assets/:id', legacyWriteRetired);
 
 app.get('/summary-by-currency', async (req, res) => {
     try {

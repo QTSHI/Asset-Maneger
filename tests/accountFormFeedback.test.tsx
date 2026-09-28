@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { MemoryRouter } from "react-router-dom";
 import { AccountsPage } from "../client/src/pages";
 import type { MetaData } from "../client/src/types";
 
@@ -42,7 +43,9 @@ describe("account edit feedback", () => {
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={client}>
-        <AccountsPage privateMode={false} />
+        <MemoryRouter>
+          <AccountsPage privateMode={false} />
+        </MemoryRouter>
       </QueryClientProvider>,
     );
 

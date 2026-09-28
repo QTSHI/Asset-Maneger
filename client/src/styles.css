@@ -12,6 +12,24 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 320px; min-height: 100vh; background: var(--bg); color: var(--ink); }
+/* First-use guidance for an empty household. */
+.first-use-panel{display:grid;justify-items:start;gap:14px;max-width:760px;padding:32px;border:1px solid var(--line);border-radius:18px;background:var(--surface);box-shadow:var(--shadow)}
+.first-use-eyebrow{color:var(--primary);font-size:11px;font-weight:750;letter-spacing:.08em}
+.first-use-panel h2{margin:0;font-size:25px;letter-spacing:-.03em;line-height:1.3}
+.first-use-panel p{max-width:580px;margin:0;color:var(--muted);font-size:12px;line-height:1.7}
+.first-use-panel>.primary-button{text-decoration:none}
+.first-use-steps{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;width:100%;margin:4px 0 6px}
+.first-use-steps>div{display:grid;grid-template-columns:32px 1fr;gap:3px 10px;align-items:center;padding:15px;border:1px solid var(--line);border-radius:12px;background:var(--surface-soft)}
+.first-use-steps b{grid-row:1/3;display:grid;place-items:center;width:30px;height:30px;border-radius:9px;background:var(--primary-soft);color:var(--primary);font-size:12px}
+.first-use-steps strong{font-size:11px}.first-use-steps span{color:var(--muted);font-size:10px}
+.first-use-steps .current{border-color:color-mix(in srgb,var(--primary) 45%,var(--line));background:color-mix(in srgb,var(--primary) 5%,var(--surface))}
+.first-use-steps .upcoming{opacity:.65}
+.hero-data-note{display:block;margin-top:7px;color:#bbd8d5;font-size:10px;font-weight:500}
+.empty-state-page .primary-button{margin-top:9px;text-decoration:none}
+.page-stack>.empty-state-page{min-height:260px;border:1px solid var(--line);border-radius:16px;background:var(--surface);box-shadow:var(--shadow)}
+.first-use-next{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 18px;border:1px solid color-mix(in srgb,var(--primary) 30%,var(--line));border-radius:14px;background:var(--primary-soft)}
+.first-use-next strong{display:block;color:var(--ink);font-size:12px}.first-use-next p{margin:4px 0 0;color:var(--muted);font-size:10px;line-height:1.5}.first-use-next .primary-button{flex:0 0 auto;text-decoration:none}
+@media(max-width:760px){.first-use-panel{padding:22px}.first-use-panel h2{font-size:21px}.first-use-steps{grid-template-columns:1fr}.first-use-next{align-items:flex-start;flex-direction:column}.first-use-next .primary-button{width:100%}}
 button, input, select, textarea { font: inherit; }
 button { color: inherit; }
 .app-shell { min-height: 100vh; display: grid; grid-template-columns: 232px 1fr; }
