@@ -249,14 +249,19 @@ async function getPrice(asset) {
 async function updateExchangeRates() {
     try {
         const resp = await axios.get('https://api.exchangerate-api.com/v4/latest/GBP', { timeout: 5000 });
-        if (resp.data && resp.data.rates) {
-            exchangeRates.GBP_TO_CNY = resp.data.rates.CNY;
-            exchangeRates.USD_TO_CNY = resp.data.rates.CNY / resp.data.rates.USD;
-            exchangeRates.EUR_TO_CNY = resp.data.rates.CNY / resp.data.rates.EUR;
-            exchangeRates.AED_TO_CNY = resp.data.rates.CNY / resp.data.rates.AED;
-            exchangeRates.JPY_TO_CNY = resp.data.rates.CNY / resp.data.rates.JPY;
+        const source = resp.data?.rates;
+        const required = ['CNY', 'USD', 'EUR', 'AED', 'JPY', 'HKD'];
+        if (!source || required.some((code) => !Number.isFinite(Number(source[code])) || Number(source[code]) <= 0)) {
+            return false;
         }
-    } catch (e) {}
+        const cny = Number(source.CNY);
+        const next = { GBP_TO_CNY: cny };
+        for (const code of required.slice(1)) next[`${code}_TO_CNY`] = cny / Number(source[code]);
+        Object.assign(exchangeRates, next);
+        return true;
+    } catch (e) {
+        return false;
+    }
 }
 
 function getExchangeRates() { return exchangeRates; }

@@ -29,10 +29,6 @@ test('month controls can navigate to future periods', async ({ page }) => {
   await page.getByRole('button', { name: '记一笔' }).click();
   await expect(page.locator('input[name="occurred_on"]')).toHaveValue(`${expectedNext}-01`);
   await page.keyboard.press('Escape');
-
-  await page.goto('/#/plans');
-  await page.getByRole('button', { name: '下一个月' }).click();
-  await expect(page.getByRole('heading', { name: new RegExp(`${next.getFullYear()} 年 ${next.getMonth() + 1} 月大额事项日历`) })).toBeVisible();
 });
 
 test('responsive navigation is usable with no page overflow', async ({ page }) => {

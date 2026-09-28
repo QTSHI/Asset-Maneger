@@ -8,15 +8,35 @@ const path = require('path');
 const https = require('https');
 const fs = require('fs');
 
+const IS_DEVELOPMENT = process.env.NODE_ENV === 'development';
+
+// The preview bypasses SSO, so it must never open the production database.
+if (IS_DEVELOPMENT) {
+    const configuredPath = process.env.ASSET_TRACKER_DB_PATH;
+    const resolveDatabasePath = (value) => {
+        const absolute = path.resolve(process.cwd(), value);
+        if (fs.existsSync(absolute)) return fs.realpathSync(absolute);
+        const parent = path.dirname(absolute);
+        return fs.existsSync(parent)
+            ? path.join(fs.realpathSync(parent), path.basename(absolute))
+            : absolute;
+    };
+    const productionPath = path.join(__dirname, '../database.sqlite');
+    if (!configuredPath?.trim() || resolveDatabasePath(configuredPath) === resolveDatabasePath(productionPath)) {
+        throw new Error('本地预览必须设置独立的 ASSET_TRACKER_DB_PATH，不能使用正式 database.sqlite');
+    }
+}
+
 const db = require('./services/database.cjs');
 const { updateExchangeRates, getPrice, getExchangeRates, convertCurrency } = require('./services/priceFetcher.cjs');
 const wealthService = require('./services/wealthService.cjs');
+const agentService = require('./services/agentService.cjs');
+const { createMcpRouter } = require('./mcp.cjs');
 const v2Router = require('./routes/v2.cjs');
 const { PORT, EXCHANGE_RATE_INTERVAL } = require('./config/constants.cjs');
 
 const SSO_BASE_URL = 'https://stoneking.top';
 const SERVICE_NAME = 'asset-tracker';
-const IS_DEVELOPMENT = process.env.NODE_ENV === 'development';
 
 const API_PATHS = ['/asset-types', '/currencies', '/platforms', '/assets', '/snapshot', '/refresh-rates', '/exchange-rates', '/login-token', '/summary-by-currency', '/login'];
 
@@ -66,6 +86,14 @@ function isApiRequest(req) {
 const app = express();
 app.use(compression());
 app.use(express.json());
+// Agent keys have a separate entry point and are never treated as website SSO credentials.
+app.use('/mcp', createMcpRouter(agentService));
+app.use('/api/v2', (req, res, next) => {
+    if (/^Bearer(?:\s|$)/i.test(req.get('authorization') || '')) {
+        return res.status(401).json({ error: 'Bearer credentials are not accepted by the website API' });
+    }
+    next();
+});
 
 app.use((req, res, next) => {
     req.cookies = {};
@@ -212,15 +240,13 @@ app.get('/platforms', (req, res) => {
     res.json(db.prepare('SELECT * FROM platforms').all());
 });
 
-app.post('/platforms', (req, res) => {
-    const { name, category, default_currency_id } = req.body;
-    try {
-        const result = db.prepare('INSERT INTO platforms (name, category, default_currency_id) VALUES (?, ?, ?)').run(name, category || '投资类', default_currency_id);
-        res.json({ success: true, id: result.lastInsertRowid });
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
-});
+function legacyWriteRetired(_req, res) {
+    res.status(410).json({
+        error: { code: 'LEGACY_WRITE_RETIRED', message: '旧版写入接口已停用，请使用 /api/v2' }
+    });
+}
+
+app.post('/platforms', legacyWriteRetired);
 
 app.get('/assets', (req, res) => {
     const assets = db.prepare(`
@@ -235,37 +261,9 @@ app.get('/assets', (req, res) => {
     res.json(assets);
 });
 
-app.post('/assets', (req, res) => {
-    const { platform_id, asset_type_id, code, name, shares, cost_price, currency_id } = req.body;
-    try {
-        const result = db.prepare(`
-            INSERT INTO assets (platform_id, asset_type_id, code, name, shares, cost_price, currency_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(platform_id, asset_type_id, code, name, shares, cost_price, currency_id);
-        res.json({ success: true, id: result.lastInsertRowid });
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
-});
-
-app.delete('/assets/:id', (req, res) => {
-    db.prepare('DELETE FROM assets WHERE id = ?').run(req.params.id);
-    res.json({ success: true });
-});
-
-app.put('/assets/:id', (req, res) => {
-    const { platform_id, asset_type_id, code, name, shares, cost_price, currency_id } = req.body;
-    try {
-        db.prepare(`
-            UPDATE assets 
-            SET platform_id = ?, asset_type_id = ?, code = ?, name = ?, shares = ?, cost_price = ?, currency_id = ?, updated_at = CURRENT_TIMESTAMP
-            WHERE id = ?
-        `).run(platform_id, asset_type_id, code, name, shares, cost_price, currency_id, req.params.id);
-        res.json({ success: true });
-    } catch (err) {
-        res.status(400).json({ error: err.message });
-    }
-});
+app.post('/assets', legacyWriteRetired);
+app.delete('/assets/:id', legacyWriteRetired);
+app.put('/assets/:id', legacyWriteRetired);
 
 app.get('/summary-by-currency', async (req, res) => {
     try {
@@ -349,7 +347,26 @@ app.get('/snapshot', async (req, res) => {
 
 app.post('/refresh-rates', async (req, res) => {
     try {
-        await updateExchangeRates();
+        const updated = await updateExchangeRates();
+        if (!updated) {
+            return res.status(503).json({ error: '汇率服务暂时不可用，已保留上次有效汇率' });
+        }
+        const rates = getExchangeRates();
+        const entries = [
+            ['CNY', 1], ['GBP', rates.GBP_TO_CNY], ['USD', rates.USD_TO_CNY],
+            ['EUR', rates.EUR_TO_CNY], ['AED', rates.AED_TO_CNY],
+            ['JPY', rates.JPY_TO_CNY], ['HKD', rates.HKD_TO_CNY]
+        ];
+        const saveRate = db.prepare(`
+            INSERT INTO exchange_rate_cache (currency_code, rate_to_cny, status, fetched_at)
+            VALUES (?, ?, 'fresh', CURRENT_TIMESTAMP)
+            ON CONFLICT(currency_code) DO UPDATE SET
+              rate_to_cny = excluded.rate_to_cny,
+              status = 'fresh', error_message = NULL, fetched_at = CURRENT_TIMESTAMP
+        `);
+        db.transaction(() => {
+            for (const [currency, rate] of entries) saveRate.run(currency, rate);
+        })();
         res.json({ success: true });
     } catch (err) {
         res.status(500).json({ error: err.message });
@@ -369,6 +386,12 @@ app.listen(PORT, LISTEN_HOST, () => {
         : `✅ 已集成SSO认证 (${SSO_BASE_URL})`);
     setInterval(updateExchangeRates, EXCHANGE_RATE_INTERVAL);
     setInterval(() => wealthService.refreshMarket(), 30 * 60 * 1000);
-    setInterval(() => wealthService.saveDailySnapshot(), 60 * 60 * 1000);
+    setInterval(() => {
+        try {
+            wealthService.saveDailySnapshot();
+        } catch (error) {
+            console.error('每日资产快照保存失败:', error);
+        }
+    }, 60 * 60 * 1000);
     setTimeout(() => wealthService.refreshMarket(), 1500);
 });

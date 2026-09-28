@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { NavLink, Route, Routes } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import {
   Cell,
   Pie,
@@ -9,7 +9,7 @@ import {
   Tooltip,
 } from "recharts";
 import {
-  Bell,
+  Check,
   ChevronRight,
   CircleDollarSign,
   Eye,
@@ -18,35 +18,65 @@ import {
   Landmark,
   LayoutDashboard,
   Moon,
-  PiggyBank,
   RefreshCw,
   Settings2,
+  ShieldCheck,
   Sun,
   WalletCards,
 } from "lucide-react";
 import { api } from "./api";
-import { currentMonth, MonthNavigator, monthLabel } from "./dateControls";
 import type { DashboardData } from "./types";
-import {
-  AccountsPage,
-  AssetsPage,
-  BudgetPage,
-  PlansPage,
-  StatusPage,
-  TransactionsPage,
-} from "./pages";
+
+const loadPages = () => import("./pages");
+const AccountsPage = lazy(() =>
+  loadPages().then(({ AccountsPage }) => ({ default: AccountsPage })),
+);
+const AssetsPage = lazy(() =>
+  loadPages().then(({ AssetsPage }) => ({ default: AssetsPage })),
+);
+const StatusPage = lazy(() =>
+  loadPages().then(({ StatusPage }) => ({ default: StatusPage })),
+);
+const TransactionsPage = lazy(() =>
+  loadPages().then(({ TransactionsPage }) => ({ default: TransactionsPage })),
+);
+const AgentPage = lazy(() => import("./agentPage"));
 
 const nav = [
-  { label: "总览", icon: LayoutDashboard, path: "/" },
-  { label: "资产", icon: Landmark, path: "/assets" },
-  { label: "家庭预算", icon: PiggyBank, path: "/budget" },
-  { label: "收支记录", icon: WalletCards, path: "/transactions" },
-  { label: "计划与提醒", icon: Bell, path: "/plans" },
-  { label: "账户", icon: CircleDollarSign, path: "/accounts" },
-  { label: "数据状态", icon: Gauge, path: "/status" },
+  { label: "总览", mobileLabel: "总览", icon: LayoutDashboard, path: "/" },
+  { label: "资产", mobileLabel: "资产", icon: Landmark, path: "/assets" },
+  {
+    label: "收支记录",
+    mobileLabel: "收支",
+    icon: WalletCards,
+    path: "/transactions",
+  },
+  { label: "账户", mobileLabel: "账户", icon: CircleDollarSign, path: "/accounts" },
+  { label: "数据状态", mobileLabel: "状态", icon: Gauge, path: "/status" },
+  { label: "Agent 授权", mobileLabel: "Agent", icon: ShieldCheck, path: "/agent" },
 ];
 
+function MobileNavigation() {
+  return (
+    <nav className="mobile-nav" aria-label="移动端导航">
+      {nav.filter((item) => item.path !== "/agent").map((item) => (
+        <NavLink
+          className={({ isActive }) => (isActive ? "active" : "")}
+          end={item.path === "/"}
+          to={item.path}
+          key={item.label}
+        >
+          <item.icon size={20} aria-hidden="true" />
+          <span>{item.mobileLabel}</span>
+        </NavLink>
+      ))}
+    </nav>
+  );
+}
+
 function App() {
+  const hour = new Date().getHours();
+  const greeting = hour < 5 || hour >= 19 ? "晚上好" : hour < 11 ? "早上好" : hour < 14 ? "中午好" : "下午好";
   const [theme, setTheme] = useState(
     () => localStorage.getItem("stone-theme") || "light",
   );
@@ -101,9 +131,17 @@ function App() {
         <header className="topbar">
           <div>
             <span className="eyebrow">家庭财务驾驶舱</span>
-            <h1>早上好，欢迎回家</h1>
+            <h1>{greeting}，欢迎回家</h1>
           </div>
           <div className="top-actions">
+            <NavLink
+              className={({ isActive }) => `icon-button agent-access-button${isActive ? " active" : ""}`}
+              aria-label="Agent 授权"
+              title="Agent 授权"
+              to="/agent"
+            >
+              <ShieldCheck aria-hidden="true" />
+            </NavLink>
             <button
               className="icon-button"
               aria-label="隐私模式"
@@ -120,62 +158,50 @@ function App() {
             </button>
           </div>
         </header>
-        <Routes>
-          <Route path="/" element={<Dashboard privateMode={privateMode} />} />
-          <Route
-            path="/assets"
-            element={<AssetsPage privateMode={privateMode} />}
-          />
-          <Route
-            path="/budget"
-            element={<BudgetPage privateMode={privateMode} />}
-          />
-          <Route
-            path="/transactions"
-            element={<TransactionsPage privateMode={privateMode} />}
-          />
-          <Route
-            path="/plans"
-            element={<PlansPage privateMode={privateMode} />}
-          />
-          <Route
-            path="/accounts"
-            element={<AccountsPage privateMode={privateMode} />}
-          />
-          <Route path="/status" element={<StatusPage />} />
-        </Routes>
+        <Suspense fallback={<div className="state-card" role="status">正在加载页面…</div>}>
+          <Routes>
+            <Route path="/" element={<Dashboard privateMode={privateMode} />} />
+            <Route
+              path="/assets"
+              element={<AssetsPage privateMode={privateMode} />}
+            />
+            <Route
+              path="/transactions"
+              element={<TransactionsPage privateMode={privateMode} />}
+            />
+            <Route
+              path="/accounts"
+              element={<AccountsPage privateMode={privateMode} />}
+            />
+            <Route path="/status" element={<StatusPage />} />
+            <Route path="/agent" element={<AgentPage privateMode={privateMode} />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </Suspense>
       </main>
-      <nav className="mobile-nav" aria-label="移动端导航">
-        {nav.slice(0, 5).map((item) => (
-          <NavLink
-            className={({ isActive }) => (isActive ? "active" : "")}
-            end={item.path === "/"}
-            to={item.path}
-            key={item.label}
-          >
-            <item.icon size={20} />
-            <span>{item.label.replace("家庭", "")}</span>
-          </NavLink>
-        ))}
-      </nav>
+      <MobileNavigation />
     </div>
   );
 }
 
 function Dashboard({ privateMode }: { privateMode: boolean }) {
-  const [month, setMonth] = useState(currentMonth());
   const query = useQuery({
-    queryKey: ["dashboard", month],
-    queryFn: () => api.get<DashboardData>(`/dashboard?month=${month}&range=3M`),
+    queryKey: ["dashboard"],
+    queryFn: () => api.get<DashboardData>("/dashboard"),
   });
   const data = query.data;
+  const accountsQuery = useQuery({
+    queryKey: ["accounts"],
+    queryFn: () => api.get<Array<{ id: number }>>("/accounts"),
+    enabled: data?.totals.assetCount === 0,
+  });
 
-  const currency = (value: number, compact = false) =>
+  const currency = (value: number, compact = false, currencyCode = "CNY") =>
     privateMode
       ? "••••••"
       : new Intl.NumberFormat("zh-CN", {
           style: "currency",
-          currency: "CNY",
+          currency: currencyCode,
           maximumFractionDigits: compact ? 0 : 2,
           notation:
             compact && Math.abs(value) >= 1_000_000 ? "compact" : "standard",
@@ -190,6 +216,50 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
         <button onClick={() => query.refetch()}>重新加载</button>
       </div>
     );
+
+  if (data.totals.assetCount === 0 && accountsQuery.isPending)
+    return <DashboardSkeleton />;
+  if (data.totals.assetCount === 0 && accountsQuery.isError)
+    return (
+      <div className="state-card">
+        <strong>暂时无法读取账户</strong>
+        <span>{accountsQuery.error.message}</span>
+        <button onClick={() => accountsQuery.refetch()}>重新加载</button>
+      </div>
+    );
+
+  if (data.totals.assetCount === 0) {
+    const hasAccount = (accountsQuery.data?.length || 0) > 0;
+    return (
+      <section className="first-use-panel" aria-labelledby="first-use-title">
+        <span className="first-use-eyebrow">建立你的家庭资产台账</span>
+        <h2 id="first-use-title">
+          {hasAccount ? "账户已准备好，录入第一项资产" : "先添加一个账户，再录入资产"}
+        </h2>
+        <p>
+          {hasAccount
+            ? "可以从一笔现金、基金或股票开始。保存后，总览会根据真实记录生成。"
+            : "账户代表资产所在的位置，例如银行、支付宝或证券平台。这里暂时没有资产记录。"}
+        </p>
+        <div className="first-use-steps" aria-label="首次使用步骤">
+          <div className={hasAccount ? "done" : "current"}>
+            <b>{hasAccount ? <Check size={16} aria-label="已完成" /> : "1"}</b>
+            <strong>添加账户</strong>
+            <span>填写平台或子账户名称</span>
+          </div>
+          <div className={hasAccount ? "current" : "upcoming"}>
+            <b>2</b>
+            <strong>录入第一项资产</strong>
+            <span>填写数量、成本和币种</span>
+          </div>
+        </div>
+        <NavLink className="primary-button" to={hasAccount ? "/assets" : "/accounts"}>
+          {hasAccount ? "去添加资产" : "去添加账户"}
+          <ChevronRight size={16} aria-hidden="true" />
+        </NavLink>
+      </section>
+    );
+  }
 
   const classCards = ["cash", "fund", "stock", "alternative"].map(
     (code) =>
@@ -211,21 +281,17 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
   const unclassified = data.allocations.byClass.find(
     (item) => item.code === "unclassified",
   );
-
   return (
     <div className="dashboard-grid">
-      <section className="dashboard-period">
-        <div>
-          <span>家庭财务月份</span>
-          <strong>{monthLabel(month)}</strong>
-        </div>
-        <MonthNavigator month={month} onChange={setMonth} />
-      </section>
       <section className="hero-card">
         <div className="hero-head">
           <div>
             <span>家庭总资产</span>
             <strong>{currency(data.totals.marketValueCny)}</strong>
+            <small className="hero-data-note">
+              页面生成于 {new Date(data.asOf).toLocaleString("zh-CN", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+              {" · "}{data.freshness.staleCount} 项行情待关注
+            </small>
           </div>
           <span className="live-pill">
             <i /> CNY 基准
@@ -313,55 +379,6 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
         </div>
       </section>
 
-      <section className="panel budget-panel">
-        <PanelTitle
-          title="家庭预算"
-          subtitle={data.household.month.replace("-", " 年 ") + " 月"}
-          action={
-            <button className="text-button">
-              管理预算 <ChevronRight size={15} />
-            </button>
-          }
-        />
-        <div className="budget-summary">
-          <div>
-            <span>已支出</span>
-            <strong>{currency(data.household.totals.expense)}</strong>
-          </div>
-          <div>
-            <span>预算剩余</span>
-            <strong>{currency(data.household.totals.remainingBudget)}</strong>
-          </div>
-        </div>
-        <div className="budget-progress">
-          <i
-            style={{
-              width: `${Math.min(100, data.household.totals.plannedExpense > 0 ? (data.household.totals.expense / data.household.totals.plannedExpense) * 100 : 0)}%`,
-            }}
-          />
-        </div>
-        <div className="budget-categories">
-          {data.household.budgets
-            .filter((x) => x.kind === "expense")
-            .slice(0, 4)
-            .map((item) => (
-              <div key={item.id}>
-                <i style={{ background: item.color }} />
-                <span>{item.categoryName}</span>
-                <strong>
-                  {currency(item.actual, true)} / {currency(item.planned, true)}
-                </strong>
-              </div>
-            ))}
-          {!data.household.budgets.length && (
-            <div className="empty-inline">
-              <PiggyBank size={20} />
-              <span>还没有预算，先为这个月做个轻量计划</span>
-            </div>
-          )}
-        </div>
-      </section>
-
       <section className="panel account-panel">
         <PanelTitle title="主要账户" subtitle="按市值排序" />
         <div className="account-list">
@@ -378,55 +395,15 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
         </div>
       </section>
 
-      <section className="panel reminder-panel">
-        <PanelTitle
-          title="近期大额事项"
-          subtitle="未来 30 天"
-          action={
-            <button className="round-button" aria-label="查看大额事项提醒">
-              <Bell size={16} />
-            </button>
-          }
-        />
-        <div className="memo-list">
-          {data.household.memos.slice(0, 4).map((memo) => (
-            <div className={memo.display_status} key={memo.id}>
-              <div className="memo-date">
-                <strong>{memo.due_date.slice(8)}</strong>
-                <span>{memo.due_date.slice(5, 7)}月</span>
-              </div>
-              <div>
-                <strong>{memo.title}</strong>
-                <span>
-                  {memo.display_status === "overdue"
-                    ? "已逾期"
-                    : memo.days_until === 0
-                      ? "今天"
-                      : `${memo.days_until} 天后`}
-                </span>
-              </div>
-              <b>
-                {memo.kind === "expense" ? "-" : "+"}
-                {currency(memo.expected_amount, true)}
-              </b>
-            </div>
-          ))}
-          {!data.household.memos.length && (
-            <div className="empty-inline">
-              <Bell size={20} />
-              <span>未来 30 天没有待处理的大额事项</span>
-            </div>
-          )}
-        </div>
-      </section>
-
       <div className="data-note">
         <RefreshCw size={14} />
         <span>
-          {data.freshness.staleCount
+          {data.freshness.market.state === "error"
+            ? "行情或汇率更新有异常"
+            : data.freshness.staleCount
             ? `${data.freshness.staleCount} 项行情需要更新`
-            : "资产数据已同步"}{" "}
-          · 更新于{" "}
+            : "行情暂无待更新项"}{" "}
+          · 页面生成于{" "}
           {new Date(data.asOf).toLocaleTimeString("zh-CN", {
             hour: "2-digit",
             minute: "2-digit",

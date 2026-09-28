@@ -1,17 +1,14 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { NavLink } from "react-router-dom";
 import {
   AlertCircle,
   ArrowDownLeft,
   ArrowUpRight,
-  Bell,
-  CalendarDays,
   Check,
   ChevronRight,
   CircleDollarSign,
-  Clock3,
   Edit3,
-  FolderKanban,
   Landmark,
   Link2,
   ListFilter,
@@ -20,7 +17,6 @@ import {
   Search,
   ShieldCheck,
   Sparkles,
-  Target,
   Trash2,
   WalletCards,
   X,
@@ -31,27 +27,20 @@ import { consolidateInstruments } from "./instrumentConsolidation";
 import {
   currentMonth,
   MonthNavigator,
-  monthLabel,
-  shiftMonth,
   today,
 } from "./dateControls";
 import type {
-  DashboardData,
-  FinancialMemo,
-  HouseholdPlan,
-  HouseholdProject,
-  HouseholdSummary,
   HouseholdTransaction,
   MetaData,
   ValuedAsset,
 } from "./types";
 
-const money = (value: number, hidden = false) =>
+const money = (value: number, hidden = false, currencyCode = "CNY") =>
   hidden
     ? "••••••"
     : new Intl.NumberFormat("zh-CN", {
         style: "currency",
-        currency: "CNY",
+        currency: currencyCode,
         maximumFractionDigits: 2,
       }).format(value || 0);
 
@@ -87,11 +76,51 @@ function Modal({
   children: ReactNode;
   onClose: () => void;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const onCloseRef = useRef(onClose);
+  onCloseRef.current = onClose;
+
   useEffect(() => {
-    const close = (event: KeyboardEvent) => event.key === "Escape" && onClose();
-    window.addEventListener("keydown", close);
-    return () => window.removeEventListener("keydown", close);
-  }, [onClose]);
+    const dialog = dialogRef.current;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const firstField = dialog?.querySelector<HTMLElement>(
+      'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])',
+    );
+    (firstField || dialog)?.focus();
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onCloseRef.current();
+        return;
+      }
+      if (event.key !== "Tab" || !dialog) return;
+
+      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+      )).filter((element) => !element.hasAttribute("hidden"));
+      if (!focusable.length) {
+        event.preventDefault();
+        dialog.focus();
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+      if (event.shiftKey && (active === first || active === dialog || !dialog.contains(active))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (active === last || !dialog.contains(active))) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      previousFocus?.focus();
+    };
+  }, []);
   return (
     <div
       className="modal-backdrop"
@@ -99,10 +128,12 @@ function Modal({
       onMouseDown={(e) => e.target === e.currentTarget && onClose()}
     >
       <section
+        ref={dialogRef}
         className="dialog"
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        tabIndex={-1}
       >
         <header>
           <div>
@@ -127,7 +158,15 @@ function SubmitButton({
   children?: ReactNode;
 }) {
   return (
-    <button className="primary-button" disabled={pending} type="submit">
+    <button
+      className="primary-button"
+      aria-disabled={pending}
+      type="submit"
+      style={pending ? { opacity: 0.55, cursor: "not-allowed", transform: "none" } : undefined}
+      onClick={(event) => {
+        if (pending) event.preventDefault();
+      }}
+    >
       {pending ? <RefreshCw className="spin" size={16} /> : <Check size={16} />}{" "}
       {pending ? "正在保存" : children}
     </button>
@@ -138,16 +177,19 @@ function EmptyState({
   icon,
   title,
   text,
+  action,
 }: {
   icon: ReactNode;
   title: string;
   text: string;
+  action?: ReactNode;
 }) {
   return (
     <div className="empty-state-page">
       {icon}
       <strong>{title}</strong>
       <span>{text}</span>
+      {action}
     </div>
   );
 }
@@ -160,6 +202,28 @@ function useMeta() {
   });
 }
 
+const isCashBalance = (asset: ValuedAsset) =>
+  asset.assetType === "cash";
+
+function cashConfirmation(asset: ValuedAsset) {
+  if (asset.externalSource === "trading212") {
+    const synced = asset.quote.fetchedAt?.slice(0, 10);
+    if (!synced) return { label: "余额尚未同步", stale: true };
+    const days = Math.floor((Date.parse(today()) - Date.parse(synced)) / 86_400_000);
+    return {
+      label: days > 3 ? `上次同步 ${synced} · 建议刷新` : `余额同步于 ${synced}`,
+      stale: days > 3,
+    };
+  }
+  const date = asset.cashConfirmedAt?.slice(0, 10);
+  if (!date) return { label: "余额尚未确认", stale: true };
+  const days = Math.floor((Date.parse(today()) - Date.parse(date)) / 86_400_000);
+  return {
+    label: days > 30 ? `上次确认 ${date} · 建议复核` : `余额确认于 ${date}`,
+    stale: days > 30,
+  };
+}
+
 export function AssetsPage({ privateMode }: { privateMode: boolean }) {
   const client = useQueryClient();
   const assets = useQuery({
@@ -170,6 +234,7 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
   const [view, setView] = useState<"class" | "account">("class");
   const [query, setQuery] = useState("");
   const [editing, setEditing] = useState<ValuedAsset | "new" | null>(null);
+  const [editingCash, setEditingCash] = useState<ValuedAsset | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [selectedInstrument, setSelectedInstrument] = useState<string | null>(null);
 
@@ -244,6 +309,8 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
     },
   });
   const total = filtered.reduce((sum, asset) => sum + asset.marketValueCny, 0);
+  const isFirstAsset = assets.data?.length === 0;
+  const needsAccount = meta.data?.accounts.length === 0;
 
   return (
     <div className="page-stack">
@@ -251,12 +318,40 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
         eyebrow="Asset intelligence"
         title="家庭资产"
         description="先看资产类别，再按平台、子账户或购买渠道进入具体持仓。"
-        action={
-          <button className="primary-button" onClick={() => setEditing("new")}>
-            <Plus size={16} /> 添加资产
-          </button>
-        }
+        action={!assets.isPending && !assets.isError && !isFirstAsset && (needsAccount
+          ? <NavLink className="primary-button" to="/accounts"><Plus size={16} /> 先添加账户</NavLink>
+          : <button className="primary-button" onClick={() => setEditing("new")} disabled={!meta.data}>
+              <Plus size={16} /> 添加资产
+            </button>)}
       />
+      {meta.error && (
+        <p className="form-error" role="alert">
+          无法加载账户和资产类型：{meta.error.message}{" "}
+          <button className="link-button" onClick={() => meta.refetch()}>重新加载</button>
+        </p>
+      )}
+      {assets.isPending ? (
+        <div className="state-card" role="status">正在加载资产…</div>
+      ) : assets.isError ? (
+        <div className="state-card" role="alert">
+          <strong>暂时无法读取资产</strong>
+          <span>{assets.error.message}</span>
+          <button type="button" onClick={() => assets.refetch()}>重试读取资产</button>
+        </div>
+      ) : isFirstAsset ? (
+        <EmptyState
+          icon={<Landmark />}
+          title={needsAccount ? "先添加一个账户" : "还没有资产"}
+          text={needsAccount
+            ? "资产需要归属到银行、证券平台或其他账户。先建账户，再录入第一项资产。"
+            : "从一笔现金、基金或股票开始，录入后就能在总览查看真实资产。"}
+          action={needsAccount
+            ? <NavLink className="primary-button" to="/accounts"><Plus size={16} /> 去添加账户</NavLink>
+            : <button className="primary-button" onClick={() => setEditing("new")} disabled={!meta.data}>
+                <Plus size={16} /> 添加第一项资产
+              </button>}
+        />
+      ) : <>
       <div className="account-hierarchy-guide" aria-label="资产账户层级">
         <div><b>1</b><span>平台</span><strong>支付宝、Trading212</strong></div>
         <ChevronRight size={16} />
@@ -442,6 +537,11 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
                     <td data-label="资产">
                       <strong>{asset.name}</strong>
                       <small>{asset.code} · {asset.currency}</small>
+                      {isCashBalance(asset) && (
+                        <small className={cashConfirmation(asset).stale ? "negative" : ""}>
+                          {cashConfirmation(asset).label}
+                        </small>
+                      )}
                       {asset.dataQuality.status !== "ready" && (
                         <span className={`quality-tag ${asset.dataQuality.status}`}>
                           {asset.dataQuality.label}
@@ -496,6 +596,9 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
                     </td>
                     <td data-label="操作">
                       <div className="row-actions">
+                        {isCashBalance(asset) && asset.externalSource !== "trading212" && (
+                          <button onClick={() => setEditingCash(asset)} aria-label={`更新 ${asset.name} 余额`} title="更新现金余额"><WalletCards size={15} /></button>
+                        )}
                         <button onClick={() => setEditing(asset)} aria-label={`修改 ${asset.name}`}><Edit3 size={15} /></button>
                         <button
                           onClick={() => confirm(`删除 ${asset.name}？删除后将从当前统计中移除。`) && archive.mutate(asset.id)}
@@ -516,11 +619,12 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
           <EmptyState
             icon={<Landmark />}
             title="没有匹配的资产"
-            text="调整搜索条件，或添加第一项资产。"
+            text="试试其他名称、代码或账户关键词。"
           />
         )}
       </div>
-      {editing && meta.data && (
+      </>}
+      {editing && meta.data && meta.data.accounts.length > 0 && (
         <AssetForm
           asset={editing === "new" ? undefined : editing}
           meta={meta.data}
@@ -528,6 +632,19 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
           onSaved={() => {
             setEditing(null);
             client.invalidateQueries({ queryKey: ["assets"] });
+            client.invalidateQueries({ queryKey: ["dashboard"] });
+          }}
+        />
+      )}
+      {editingCash && (
+        <CashBalanceForm
+          asset={editingCash}
+          privateMode={privateMode}
+          onClose={() => setEditingCash(null)}
+          onSaved={() => {
+            setEditingCash(null);
+            client.invalidateQueries({ queryKey: ["assets"] });
+            client.invalidateQueries({ queryKey: ["accounts"] });
             client.invalidateQueries({ queryKey: ["dashboard"] });
           }}
         />
@@ -581,8 +698,9 @@ function AssetForm({
     <Modal title={asset ? "编辑资产" : "添加资产"} onClose={onClose}>
       <form className="form-grid" onSubmit={submit}>
         <label>
-          <span>内部资产编号</span>
-          <input name="code" defaultValue={asset?.code} required />
+          <span>自定义资产编号</span>
+          <input name="code" defaultValue={asset?.code} required placeholder="例如 CASH-CNY-001" />
+          <small className="field-help">用于区分持仓，给每项资产填一个不重复的编号。</small>
         </label>
         <label>
           <span>行情代码</span>
@@ -629,6 +747,7 @@ function AssetForm({
             defaultValue={asset?.shares}
             required
           />
+          <small className="field-help">现金填当前余额；基金或股票填持有数量。</small>
         </label>
         <label>
           <span>份额可信度</span>
@@ -653,6 +772,7 @@ function AssetForm({
             defaultValue={asset?.costPrice}
             required
           />
+          <small className="field-help">现金填 1；其他资产填每份或每股成本。</small>
         </label>
         <label>
           <span>导入时市值（历史参考）</span>
@@ -684,6 +804,7 @@ function AssetForm({
             name="currency_id"
             defaultValue={
               meta.currencies.find((x) => x.code === asset?.currency)?.id
+              ?? meta.currencies.find((x) => x.code === "CNY")?.id
             }
             required
           >
@@ -708,329 +829,11 @@ function AssetForm({
   );
 }
 
-export function BudgetPage({ privateMode }: { privateMode: boolean }) {
-  const client = useQueryClient();
-  const meta = useMeta();
-  const [month, setMonth] = useState(currentMonth());
-  const query = useQuery({
-    queryKey: ["budget", month],
-    queryFn: () =>
-      api.get<HouseholdSummary>(`/household/budgets?month=${month}`),
-  });
-  const [amounts, setAmounts] = useState<Record<number, number>>({});
-  const [showAllCategories, setShowAllCategories] = useState(false);
-  useEffect(() => {
-    if (query.data)
-      setAmounts(
-        Object.fromEntries(
-          query.data.budgets.map((x) => [x.categoryId, x.planned]),
-        ),
-      );
-  }, [query.data]);
-  const save = useMutation({
-    mutationFn: () =>
-      api.put("/household/budgets", {
-        month,
-        items: (meta.data?.categories || []).map((x) => ({
-          category_id: x.id,
-          planned_amount_cny: amounts[x.id] || 0,
-        })),
-      }),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["budget", month] });
-      client.invalidateQueries({ queryKey: ["dashboard"] });
-    },
-  });
-  const previousMonth = shiftMonth(month, -1);
-  const copy = useMutation({
-    mutationFn: () =>
-      api.post("/household/budgets/copy", {
-        fromMonth: previousMonth,
-        toMonth: month,
-      }),
-    onSuccess: () => client.invalidateQueries({ queryKey: ["budget", month] }),
-  });
-  const data = query.data;
-  const expenseCategories = (meta.data?.categories || []).filter(
-    (category) => category.kind === "expense",
-  );
-  const commonCategoryNames = new Set([
-    "家庭生活费",
-    "旅行",
-    "人情往来",
-    "其他支出",
-  ]);
-  const visibleExpenseCategories = showAllCategories
-    ? expenseCategories
-    : expenseCategories.filter((category) => {
-        const budget = data?.budgets.find(
-          (item) => item.categoryId === category.id,
-        );
-        return (
-          commonCategoryNames.has(category.name) ||
-          Number(budget?.planned || 0) > 0 ||
-          Number(budget?.actual || 0) > 0
-        );
-      });
-  return (
-    <div className="page-stack">
-      <PageHead
-        eyebrow="Household budget"
-        title="家庭预算"
-        description="按月安排家庭开支，实际收支独立记录，不自动影响资产。"
-        action={
-          <MonthNavigator month={month} onChange={setMonth} label="预算月份" />
-        }
-      />
-      {data && (
-        <div className="summary-strip budget-strip">
-          <div>
-            <span>月度预算</span>
-            <strong>{money(data.totals.plannedExpense, privateMode)}</strong>
-          </div>
-          <div>
-            <span>实际支出</span>
-            <strong>{money(data.totals.expense, privateMode)}</strong>
-          </div>
-          <div>
-            <span>预算剩余</span>
-            <strong
-              className={
-                data.totals.remainingBudget >= 0 ? "positive" : "negative"
-              }
-            >
-              {money(data.totals.remainingBudget, privateMode)}
-            </strong>
-          </div>
-          <div>
-            <span>家庭净结余</span>
-            <strong>{money(data.totals.net, privateMode)}</strong>
-          </div>
-        </div>
-      )}
-      {data && data.totals.plannedExpense === 0 && data.navigation.nextPlannedMonth && (
-        <div className="next-plan-notice">
-          <div>
-            <CalendarDays size={18} />
-            <span>
-              {monthLabel(month)}没有设置预算，最近的计划从
-              <strong>{monthLabel(data.navigation.nextPlannedMonth)}</strong>开始。
-            </span>
-          </div>
-          <button
-            className="secondary-button"
-            onClick={() => setMonth(data.navigation.nextPlannedMonth!)}
-          >
-            查看下一计划月 <ChevronRight size={15} />
-          </button>
-        </div>
-      )}
-      {meta.data && <HouseholdPlanSection meta={meta.data} privateMode={privateMode} />}
-      <section className="content-panel">
-        <div className="content-panel-head">
-          <div>
-            <h3>分类预算</h3>
-            <p>每个月独立设置，也可以复制上月预算。</p>
-          </div>
-          <button
-            className="secondary-button"
-            disabled={copy.isPending}
-            onClick={() => copy.mutate()}
-          >
-            <RefreshCw size={15} /> 复制 {previousMonth}
-          </button>
-        </div>
-        <div className="budget-category-mode">
-          <span>
-            默认显示家庭常用分类；已有预算或实际支出的分类会自动保留。
-          </span>
-          <button
-            className="text-button"
-            onClick={() => setShowAllCategories((value) => !value)}
-          >
-            {showAllCategories
-              ? "收起可选分类"
-              : `显示全部分类（${expenseCategories.length}）`}
-          </button>
-        </div>
-        <div className="budget-editor">
-          {visibleExpenseCategories.map((category) => {
-              const actual =
-                data?.budgets.find((x) => x.categoryId === category.id)
-                  ?.actual || 0;
-              const planned = amounts[category.id] || 0;
-              const pct =
-                planned > 0 ? Math.min(100, (actual / planned) * 100) : 0;
-              return (
-                <div className="budget-edit-row" key={category.id}>
-                  <i style={{ background: category.color }} />
-                  <div>
-                    <strong>{category.name}</strong>
-                    <span>已用 {money(actual, privateMode)}</span>
-                    <div className="mini-progress">
-                      <i
-                        style={{ width: `${pct}%`, background: category.color }}
-                      />
-                    </div>
-                  </div>
-                  <label>
-                    <span>预算</span>
-                    <input
-                      type="number"
-                      min="0"
-                      value={planned}
-                      onChange={(e) =>
-                        setAmounts({
-                          ...amounts,
-                          [category.id]: Number(e.target.value),
-                        })
-                      }
-                    />
-                  </label>
-                </div>
-              );
-          })}
-        </div>
-        <div className="content-actions">
-          <SubmitButton pending={save.isPending} children="保存该月预算" />
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function HouseholdPlanSection({
-  meta,
-  privateMode,
-}: {
-  meta: MetaData;
-  privateMode: boolean;
-}) {
-  const client = useQueryClient();
-  const query = useQuery({
-    queryKey: ["household-plan"],
-    queryFn: () => api.get<HouseholdPlan>("/household/plan"),
-  });
-  const [settings, setSettings] = useState<HouseholdPlan["settings"] | null>(null);
-  useEffect(() => {
-    if (query.data) setSettings(query.data.settings);
-  }, [query.data]);
-  const save = useMutation({
-    mutationFn: () => api.put("/household/plan/settings", {
-      opening_amount: settings?.openingAmount || 0,
-      opening_currency_id: settings?.openingCurrencyId,
-      planning_rate_to_cny: settings?.planningRateToCny || 1,
-      start_month: settings?.startMonth,
-      end_month: settings?.endMonth,
-    }),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["household-plan"] });
-      client.invalidateQueries({ queryKey: ["dashboard"] });
-    },
-  });
-  const plan = query.data;
-  if (!plan || !settings) return null;
-  return (
-    <section className="content-panel household-plan-panel">
-      <div className="content-panel-head">
-        <div>
-          <h3>跨月家庭资金规划</h3>
-          <p>把起始家庭资金、月度预算和待处理大额事项放在同一条时间线上。</p>
-        </div>
-        <CalendarDays size={20} />
-      </div>
-      <div className="plan-settings-grid">
-        <label>
-          <span>起始资金</span>
-          <input
-            type="number"
-            min="0"
-            step="any"
-            value={settings.openingAmount}
-            onChange={(event) => setSettings({ ...settings, openingAmount: Number(event.target.value) })}
-          />
-        </label>
-        <label>
-          <span>资金币种</span>
-          <select
-            value={settings.openingCurrencyId}
-            onChange={(event) => setSettings({ ...settings, openingCurrencyId: Number(event.target.value) })}
-          >
-            {meta.currencies.map((currency) => <option key={currency.id} value={currency.id}>{currency.code}</option>)}
-          </select>
-        </label>
-        <label>
-          <span>规划汇率（兑 CNY）</span>
-          <input
-            type="number"
-            min="0.000001"
-            step="any"
-            value={settings.planningRateToCny}
-            onChange={(event) => setSettings({ ...settings, planningRateToCny: Number(event.target.value) })}
-          />
-        </label>
-        <label>
-          <span>开始月份</span>
-          <input type="month" value={settings.startMonth} onChange={(event) => setSettings({ ...settings, startMonth: event.target.value })} />
-        </label>
-        <label>
-          <span>结束月份</span>
-          <input type="month" value={settings.endMonth} onChange={(event) => setSettings({ ...settings, endMonth: event.target.value })} />
-        </label>
-        <button className="secondary-button" disabled={save.isPending} onClick={() => save.mutate()}>
-          {save.isPending ? "保存中" : "更新规划"}
-        </button>
-      </div>
-      <div className="plan-summary-grid">
-        <div><span>起始家庭资金</span><strong>{money(plan.totals.openingBalanceCny, privateMode)}</strong></div>
-        <div><span>月度预算合计</span><strong>{money(plan.totals.plannedExpenseCny, privateMode)}</strong></div>
-        <div><span>待处理大额支出</span><strong>{money(plan.totals.memoExpenseCny, privateMode)}</strong></div>
-        <div className={plan.totals.projectedClosingBalanceCny < 0 ? "negative" : "positive"}>
-          <span>计划结束预计剩余</span><strong>{money(plan.totals.projectedClosingBalanceCny, privateMode)}</strong>
-        </div>
-      </div>
-      {plan.livingExpenseBasis && (
-        <div className="living-expense-basis">
-          <div>
-            <span>生活费正式口径</span>
-            <strong>{money(plan.livingExpenseBasis.monthlyAmountCny, privateMode)} / 月</strong>
-          </div>
-          <p>
-            以人民币预算为准；按当前规划汇率 {plan.settings.planningRateToCny} 折算，约为{" "}
-            {plan.livingExpenseBasis.openingCurrencyCode}{" "}
-            {privateMode ? "••••" : plan.livingExpenseBasis.monthlyAmountInOpeningCurrency.toFixed(2)} / 月。
-            规划期内共 {plan.livingExpenseBasis.plannedMonths} 个月，金额来自“
-            {plan.livingExpenseBasis.categoryName}”月度预算。
-          </p>
-        </div>
-      )}
-      {plan.totals.firstNegativeMonth && (
-        <div className="plan-warning"><AlertCircle size={16} />预计在 {monthLabel(plan.totals.firstNegativeMonth)} 出现资金缺口</div>
-      )}
-      <div className="responsive-table plan-table">
-        <table>
-          <thead><tr><th>月份</th><th>月度预算</th><th>大额事项</th><th>预计净变化</th><th>预计月末余额</th></tr></thead>
-          <tbody>
-            {plan.months.map((row) => (
-              <tr key={row.month}>
-                <td data-label="月份"><strong>{monthLabel(row.month)}</strong><small>{row.status === "actual" ? "实际" : row.status === "current" ? "本月" : "计划"}</small></td>
-                <td data-label="月度预算">{money(row.plannedExpenseCny, privateMode)}</td>
-                <td data-label="大额事项">{money(row.memoExpenseCny, privateMode)}</td>
-                <td data-label="预计净变化"><span className={row.projectedNetCny >= 0 ? "positive" : "negative"}>{money(row.projectedNetCny, privateMode)}</span></td>
-                <td data-label="预计月末余额"><strong>{money(row.closingBalanceCny, privateMode)}</strong></td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </section>
-  );
-}
-
 export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
   const client = useQueryClient();
   const meta = useMeta();
   const [month, setMonth] = useState(currentMonth());
+  const [selectedCategory, setSelectedCategory] = useState("");
   const [editing, setEditing] = useState<HouseholdTransaction | "new" | null>(null);
   const [deleting, setDeleting] = useState<HouseholdTransaction | null>(null);
   const query = useQuery({
@@ -1058,13 +861,15 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
     onSuccess: async () => {
       await Promise.all([
         client.invalidateQueries({ queryKey: ["transactions"] }),
-        client.invalidateQueries({ queryKey: ["budget"] }),
         client.invalidateQueries({ queryKey: ["dashboard"] }),
       ]);
       setDeleting(null);
     },
   });
   const rows = query.data || [];
+  const visibleRows = selectedCategory
+    ? rows.filter((row) => String(row.category_id) === selectedCategory)
+    : rows;
   const income = rows
     .filter((x) => x.kind === "income")
     .reduce((s, x) => s + x.amount_cny, 0);
@@ -1083,7 +888,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
           </button>
         }
       />
-      <div className="summary-strip">
+      {query.isSuccess && <div className="summary-strip">
         <div>
           <span>该月收入</span>
           <strong className="positive">{money(income, privateMode)}</strong>
@@ -1097,22 +902,44 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
           <strong>{money(income - expense, privateMode)}</strong>
         </div>
         <div>
-          <span>记录数量</span>
-          <strong>{rows.length}</strong>
+          <span>{selectedCategory ? "筛选记录" : "记录数量"}</span>
+          <strong>{visibleRows.length}</strong>
         </div>
-      </div>
+      </div>}
       <div className="toolbar">
         <MonthNavigator month={month} onChange={setMonth} label="收支月份" />
-        <button className="filter-button">
-          <ListFilter size={15} /> 全部分类
-        </button>
+        <label className="filter-button">
+          <ListFilter size={15} aria-hidden="true" />
+          <select
+            aria-label="筛选分类"
+            value={selectedCategory}
+            onChange={(event) => setSelectedCategory(event.target.value)}
+            style={{ border: 0, background: "transparent", color: "inherit", font: "inherit", cursor: "pointer" }}
+          >
+            <option value="">全部分类</option>
+            {(meta.data?.categories || []).map((category) => (
+              <option key={category.id} value={category.id}>
+                {category.kind === "income" ? "收入" : "支出"} · {category.name}
+              </option>
+            ))}
+          </select>
+        </label>
       </div>
+      {query.isPending && <div className="state-card" role="status">正在加载收支记录…</div>}
+      {query.isError && (
+        <div className="state-card" role="alert">
+          <strong>暂时无法读取收支记录</strong>
+          <span>{query.error.message}</span>
+          <button type="button" onClick={() => query.refetch()}>重试读取收支记录</button>
+        </div>
+      )}
+      {query.isSuccess && <>
       <div className="cash-flow-explainer">
         <Link2 size={18} />
         <div>
           <strong>资产联动是什么？</strong>
           <p>
-            普通收支只进入家庭预算；联动后会在所选账户生成同金额的入金或出金记录，用于区分“投资涨跌”和“家庭资金进出”。它不会自动修改持仓数量或行情价格。
+            普通收支只保存在收支记录中；联动后会在所选账户生成同金额的入金或出金记录，用于区分“投资涨跌”和“家庭资金进出”。它不会自动修改持仓数量或行情价格。
           </p>
         </div>
       </div>
@@ -1124,7 +951,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
                 <th>日期</th>
                 <th>类型</th>
                 <th>分类</th>
-                <th>账户 / 计划</th>
+                <th>账户</th>
                 <th>备注</th>
                 <th>金额</th>
                 <th>资产联动</th>
@@ -1132,7 +959,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => (
+              {visibleRows.map((row) => (
                 <tr key={row.id}>
                   <td data-label="日期">{row.occurred_on}</td>
                   <td data-label="类型">
@@ -1151,9 +978,8 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
                       {row.category_name}
                     </span>
                   </td>
-                  <td data-label="账户 / 计划">
+                  <td data-label="账户">
                     <strong>{row.account_name || "未关联账户"}</strong>
-                    <small>{row.project_name || ""}</small>
                   </td>
                   <td data-label="备注">{row.note || "—"}</td>
                   <td data-label="金额">
@@ -1201,14 +1027,15 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
             </tbody>
           </table>
         </div>
-        {!rows.length && (
+        {!visibleRows.length && (
           <EmptyState
             icon={<WalletCards />}
-            title="这个月还没有收支记录"
-            text="从一笔收入或支出开始。"
+            title={selectedCategory ? "该分类暂无收支记录" : "这个月还没有收支记录"}
+            text={selectedCategory ? "切换分类查看其他记录。" : "从一笔收入或支出开始。"}
           />
         )}
       </section>
+      </>}
       {editing && meta.data && (
         <TransactionForm
           meta={meta.data}
@@ -1218,7 +1045,6 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
           onSaved={() => {
             setEditing(null);
             client.invalidateQueries({ queryKey: ["transactions"] });
-            client.invalidateQueries({ queryKey: ["budget"] });
             client.invalidateQueries({ queryKey: ["dashboard"] });
           }}
         />
@@ -1266,7 +1092,7 @@ function DeleteTransactionDialog({
             </span>
           </div>
         </div>
-        <p>删除后，这笔记录会立即从当月收支、预算实际值和总览统计中移除。</p>
+        <p>删除后，这笔记录会立即从当月收支和总览统计中移除。</p>
         {transaction.linked_cash_flow_id && (
           <label className="delete-link-choice">
             <span>这笔记录已关联资产资金流</span>
@@ -1368,7 +1194,6 @@ function TransactionForm({
             step="any"
             defaultValue={transaction?.amount}
             required
-            autoFocus
           />
         </label>
         <label>
@@ -1439,7 +1264,7 @@ function TransactionForm({
             <span>已关联的资产资金流</span>
             <select name="linked_action" defaultValue="sync">
               <option value="sync">同步更新资金流</option>
-              <option value="unlink">解除关联，原资金流归档</option>
+              <option value="unlink">解除关联，保留原资金流</option>
             </select>
           </label>
         )}
@@ -1457,452 +1282,68 @@ function TransactionForm({
   );
 }
 
-export function PlansPage({ privateMode }: { privateMode: boolean }) {
-  const client = useQueryClient();
-  const meta = useMeta();
-  const [modal, setModal] = useState<"project" | "memo" | null>(null);
-  const [calendarMonth, setCalendarMonth] = useState(currentMonth());
-  const dashboard = useQuery({
-    queryKey: ["dashboard-plans", calendarMonth],
-    queryFn: () =>
-      api.get<DashboardData>(`/dashboard?month=${calendarMonth}&range=1M`),
-  });
-  const memoQuery = useQuery({
-    queryKey: ["memos"],
-    queryFn: () => api.get<FinancialMemo[]>("/household/memos"),
-  });
-  const projects = dashboard.data?.household.projects || [];
-  const memos = useMemo(() => {
-    const todayAtNoon = new Date(`${today()}T12:00:00`).getTime();
-    return (memoQuery.data || [])
-      .filter((memo) => memo.status === "pending")
-      .map((memo) => {
-        const daysUntil = Math.round(
-          (new Date(`${memo.due_date}T12:00:00`).getTime() - todayAtNoon) /
-            86_400_000,
-        );
-        return {
-          ...memo,
-          days_until: daysUntil,
-          display_status:
-            daysUntil < 0
-              ? "overdue"
-              : daysUntil <= memo.reminder_days
-                ? "upcoming"
-                : "pending",
-        } as FinancialMemo;
-      })
-      .sort((a, b) => a.due_date.localeCompare(b.due_date));
-  }, [memoQuery.data]);
-  const [calendarYear, calendarMonthNumber] = calendarMonth
-    .split("-")
-    .map(Number);
-  const calendarDays = Array.from(
-    { length: new Date(calendarYear, calendarMonthNumber, 0).getDate() },
-    (_, index) => {
-      const day = index + 1;
-      const key = `${calendarMonth}-${String(day).padStart(2, "0")}`;
-      const date = new Date(calendarYear, calendarMonthNumber - 1, day, 12);
-      return {
-        key,
-        day,
-        weekday: "日一二三四五六"[date.getDay()],
-        memos: memos.filter((memo) => memo.due_date === key),
-      };
-    },
-  );
-  const refreshPlans = () => {
-    client.invalidateQueries({ queryKey: ["dashboard-plans"] });
-    client.invalidateQueries({ queryKey: ["memos"] });
-    client.invalidateQueries({ queryKey: ["dashboard"] });
-  };
-  const completeProject = useMutation({
-    mutationFn: (id: number) =>
-      api.patch(`/household/projects/${id}`, { status: "completed" }),
-    onSuccess: refreshPlans,
-  });
-  const archiveProject = useMutation({
-    mutationFn: (id: number) => api.delete(`/household/projects/${id}`),
-    onSuccess: refreshPlans,
-  });
-  const completeMemo = useMutation({
-    mutationFn: ({ memo, create }: { memo: FinancialMemo; create: boolean }) =>
-      api.post(`/household/memos/${memo.id}/complete`, {
-        create_transaction: create,
-        category_id: memo.category_id || null,
-        account_id: memo.account_id || null,
-      }),
-    onSuccess: refreshPlans,
-  });
-  const archiveMemo = useMutation({
-    mutationFn: (id: number) => api.delete(`/household/memos/${id}`),
-    onSuccess: refreshPlans,
-  });
-  return (
-    <div className="page-stack">
-      <PageHead
-        eyebrow="Family planning"
-        title="计划与提醒"
-        description="把跨月目标和未来大额事项放在同一处，临近与逾期一眼可见。"
-        action={
-          <div className="button-row">
-            <button
-              className="secondary-button"
-              onClick={() => setModal("memo")}
-            >
-              <Bell size={15} /> 新建备忘
-            </button>
-            <button
-              className="primary-button"
-              onClick={() => setModal("project")}
-            >
-              <Plus size={16} /> 新建专项
-            </button>
-          </div>
-        }
-      />
-      <section className="content-panel reminder-calendar">
-        <div className="content-panel-head">
-          <div>
-            <h3>{monthLabel(calendarMonth)}大额事项日历</h3>
-            <p>可切换到任意月份，提前安排大额收入与支出。</p>
-          </div>
-          <MonthNavigator
-            month={calendarMonth}
-            onChange={setCalendarMonth}
-            label="计划日历月份"
-          />
-        </div>
-        <div className="calendar-strip">
-          {calendarDays.map((day) => (
-            <div
-              className={day.memos.length ? "has-event" : ""}
-              style={day.day === 1 ? { gridColumnStart: new Date(calendarYear, calendarMonthNumber - 1, 1, 12).getDay() + 1 } : undefined}
-              key={day.key}
-            >
-              <span>周{day.weekday}</span>
-              <strong>{day.day}</strong>
-              {day.memos.slice(0, 2).map((memo) => (
-                <i className={memo.kind} title={memo.title} key={memo.id} />
-              ))}
-            </div>
-          ))}
-        </div>
-      </section>
-      <div className="plans-layout">
-        <section className="content-panel">
-          <div className="content-panel-head">
-            <div>
-              <h3>家庭专项计划</h3>
-              <p>旅行、装修、教育等跨月目标</p>
-            </div>
-            <Target size={20} />
-          </div>
-          <div className="project-grid">
-            {projects.map((project) => (
-              <article className="project-card" key={project.id}>
-                <div>
-                  <span className={`project-status ${project.status}`}>
-                    {
-                      (
-                        {
-                          planned: "计划中",
-                          active: "进行中",
-                          completed: "已完成",
-                          cancelled: "已取消",
-                        } as Record<string, string>
-                      )[project.status]
-                    }
-                  </span>
-                  <FolderKanban size={18} />
-                </div>
-                <h4>{project.name}</h4>
-                <p>{project.note || "共同为这个目标做好准备。"}</p>
-                <div className="project-money">
-                  <strong>{money(project.spent_cny, privateMode)}</strong>
-                  <span>/ {money(project.target_amount_cny, privateMode)}</span>
-                </div>
-                <div className="mini-progress large">
-                  <i style={{ width: `${Math.min(100, project.progress)}%` }} />
-                </div>
-                <footer>
-                  <span>{project.progress.toFixed(0)}% 完成</span>
-                  <span>{project.end_date || "未设截止日"}</span>
-                </footer>
-                <div className="card-actions">
-                  {project.status !== "completed" && (
-                    <button onClick={() => completeProject.mutate(project.id)}>
-                      标记完成
-                    </button>
-                  )}
-                  <button
-                    onClick={() =>
-                      confirm("归档这个专项计划？") &&
-                      archiveProject.mutate(project.id)
-                    }
-                  >
-                    归档
-                  </button>
-                </div>
-              </article>
-            ))}
-            {!projects.length && (
-              <EmptyState
-                icon={<Target />}
-                title="还没有专项计划"
-                text="为旅行、装修或教育建立一个跨月目标。"
-              />
-            )}
-          </div>
-        </section>
-        <section className="content-panel">
-          <div className="content-panel-head">
-            <div>
-              <h3>大额收支备忘</h3>
-              <p>显示全部待处理事项，不再限制未来 30 天。</p>
-            </div>
-            <Bell size={20} />
-          </div>
-          <div className="large-memo-list">
-            {memos.map((memo) => (
-              <article className={memo.display_status} key={memo.id}>
-                <div className="timeline-marker">
-                  <i />
-                </div>
-                <div>
-                  <span>
-                    {memo.due_date} ·{" "}
-                    {memo.display_status === "overdue"
-                      ? "已逾期"
-                      : memo.days_until === 0
-                        ? "今天"
-                        : `${memo.days_until} 天后`}
-                  </span>
-                  <strong>{memo.title}</strong>
-                  <p>{memo.note || "到期前会在总览中提醒。"}</p>
-                  <div className="card-actions">
-                    <button
-                      onClick={() =>
-                        completeMemo.mutate({
-                          memo,
-                          create:
-                            Boolean(memo.category_id) &&
-                            confirm("是否同时生成一条实际家庭收支？"),
-                        })
-                      }
-                    >
-                      完成
-                    </button>
-                    <button
-                      onClick={() =>
-                        confirm("取消并归档这个备忘？") &&
-                        archiveMemo.mutate(memo.id)
-                      }
-                    >
-                      归档
-                    </button>
-                  </div>
-                </div>
-                <b className={memo.kind === "income" ? "positive" : "negative"}>
-                  {memo.kind === "income" ? "+" : "-"}
-                  {money(memo.expected_amount, privateMode)}
-                </b>
-              </article>
-            ))}
-            {!memos.length && (
-              <EmptyState
-                icon={<Clock3 />}
-                title="没有待处理的大额事项"
-                text="可先切换计划月份，再新建未来备忘。"
-              />
-            )}
-          </div>
-        </section>
-      </div>
-      {modal && meta.data && (
-        <PlanForm
-          kind={modal}
-          meta={meta.data}
-          initialMonth={calendarMonth}
-          onClose={() => setModal(null)}
-          onSaved={() => {
-            setModal(null);
-            client.invalidateQueries({ queryKey: ["dashboard-plans"] });
-            client.invalidateQueries({ queryKey: ["memos"] });
-            client.invalidateQueries({ queryKey: ["dashboard"] });
-          }}
-        />
-      )}
-    </div>
-  );
-}
-
-function PlanForm({
-  kind,
-  meta,
-  initialMonth,
+function CashBalanceForm({
+  asset,
+  privateMode,
   onClose,
   onSaved,
 }: {
-  kind: "project" | "memo";
-  meta: MetaData;
-  initialMonth: string;
+  asset: ValuedAsset;
+  privateMode: boolean;
   onClose: () => void;
   onSaved: () => void;
 }) {
-  const initialDate =
-    initialMonth === currentMonth() ? today() : `${initialMonth}-01`;
-  const [memoKind, setMemoKind] = useState<"income" | "expense">("expense");
   const mutation = useMutation({
-    mutationFn: (body: unknown) =>
-      api.post(
-        kind === "project" ? "/household/projects" : "/household/memos",
-        body,
-      ),
+    mutationFn: (payload: { balance: number; confirmed_on: string }) =>
+      api.patch(`/assets/${asset.id}/cash-balance`, payload),
     onSuccess: onSaved,
   });
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const f = new FormData(event.currentTarget);
-    mutation.mutate(
-      kind === "project"
-        ? {
-            name: f.get("name"),
-            target_amount_cny: Number(f.get("amount")),
-            start_date: f.get("start_date") || null,
-            end_date: f.get("end_date") || null,
-            status: "active",
-            note: f.get("note"),
-          }
-        : {
-            kind: memoKind,
-            title: f.get("name"),
-            expected_amount: Number(f.get("amount")),
-            currency_id: Number(f.get("currency_id")),
-            due_date: f.get("due_date"),
-            reminder_days: Number(f.get("reminder_days")),
-            account_id: f.get("account_id")
-              ? Number(f.get("account_id"))
-              : null,
-            category_id: f.get("category_id")
-              ? Number(f.get("category_id"))
-              : null,
-            status: "pending",
-            note: f.get("note"),
-          },
-    );
+    const form = new FormData(event.currentTarget);
+    mutation.mutate({
+      balance: Number(form.get("balance")),
+      confirmed_on: String(form.get("confirmed_on")),
+    });
   };
   return (
-    <Modal
-      title={kind === "project" ? "新建专项计划" : "新建大额备忘"}
-      onClose={onClose}
-    >
+    <Modal title={`确认 ${asset.name} 余额`} onClose={onClose}>
       <form className="form-grid" onSubmit={submit}>
-        {kind === "memo" && (
-          <label className="span-2">
-            <span>类型</span>
-            <select
-              name="memo_kind"
-              value={memoKind}
-              onChange={(event) =>
-                setMemoKind(event.target.value as "income" | "expense")
-              }
-            >
-              <option value="expense">预计支出</option>
-              <option value="income">预计收入</option>
-            </select>
-          </label>
-        )}
+        <p className="field-help span-2">直接更新这项现金资产的余额，不会新增资产或收支记录。</p>
         <label>
-          <span>{kind === "project" ? "计划名称" : "事项标题"}</span>
-          <input name="name" required autoFocus />
+          <span>确认后的余额 · {asset.currency}</span>
+          <input
+            name="balance"
+            type="number"
+            step="any"
+            defaultValue={privateMode ? "" : asset.shares}
+            placeholder="输入当前余额"
+            required
+          />
         </label>
         <label>
-          <span>{kind === "project" ? "目标金额" : "预计金额"}</span>
-          <input name="amount" type="number" min="0" step="any" required />
+          <span>确认日期</span>
+          <input name="confirmed_on" type="date" defaultValue={today()} max={today()} required />
         </label>
-        {kind === "project" ? (
-          <>
-            <label>
-              <span>开始日期</span>
-              <input name="start_date" type="date" defaultValue={initialDate} />
-            </label>
-            <label>
-              <span>结束日期</span>
-              <input name="end_date" type="date" />
-            </label>
-          </>
-        ) : (
-          <>
-            <label>
-              <span>币种</span>
-              <select
-                name="currency_id"
-                defaultValue={meta.currencies.find((x) => x.code === "CNY")?.id}
-              >
-                {meta.currencies.map((x) => (
-                  <option value={x.id} key={x.id}>
-                    {x.code}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              <span>预计日期</span>
-              <input name="due_date" type="date" defaultValue={initialDate} required />
-            </label>
-            <label>
-              <span>分类</span>
-              <select name="category_id">
-                <option value="">暂不设置</option>
-                {meta.categories
-                  .filter((item) => item.kind === memoKind)
-                  .map((item) => (
-                    <option value={item.id} key={item.id}>
-                      {item.name}
-                    </option>
-                  ))}
-              </select>
-            </label>
-            <label>
-              <span>提前提醒</span>
-              <select name="reminder_days" defaultValue="7">
-                <option value="1">1 天</option>
-                <option value="3">3 天</option>
-                <option value="7">7 天</option>
-                <option value="14">14 天</option>
-                <option value="30">30 天</option>
-              </select>
-            </label>
-            <label>
-              <span>关联账户</span>
-              <select name="account_id">
-                <option value="">暂不关联</option>
-                {meta.accounts.map((x) => (
-                  <option value={x.id} key={x.id}>
-                    {x.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-          </>
-        )}
-        <label className="span-2">
-          <span>备注</span>
-          <textarea name="note" rows={3} />
-        </label>
-        {mutation.error && (
-          <p className="form-error span-2">{mutation.error.message}</p>
-        )}
+        {mutation.error && <p className="form-error span-2">{mutation.error.message}</p>}
         <div className="form-actions span-2">
-          <button type="button" className="secondary-button" onClick={onClose}>
-            取消
-          </button>
-          <SubmitButton pending={mutation.isPending} />
+          <button type="button" className="secondary-button" onClick={onClose}>取消</button>
+          <SubmitButton pending={mutation.isPending}>确认余额</SubmitButton>
         </div>
       </form>
     </Modal>
   );
+}
+
+interface AccountRecord {
+  id: number;
+  name: string;
+  account_type: string;
+  default_currency_id: number | null;
+  currency_code: string | null;
+  asset_count: number;
+  market_value_cny: number;
+  archived_at?: string | null;
 }
 
 export function AccountsPage({ privateMode }: { privateMode: boolean }) {
@@ -1910,14 +1351,35 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
   const meta = useMeta();
   const query = useQuery({
     queryKey: ["accounts"],
-    queryFn: () => api.get<any[]>("/accounts"),
+    queryFn: () => api.get<AccountRecord[]>("/accounts"),
   });
   const assets = useQuery({
     queryKey: ["assets"],
     queryFn: () => api.get<ValuedAsset[]>("/assets"),
   });
-  const [open, setOpen] = useState(false);
+  const [showArchived, setShowArchived] = useState(false);
+  const archivedAccounts = useQuery({
+    queryKey: ["accounts", "archived"],
+    queryFn: () => api.get<AccountRecord[]>("/accounts?archived=1"),
+    enabled: showArchived,
+  });
+  const [editingAccount, setEditingAccount] = useState<AccountRecord | "new" | null>(null);
+  const [editingCash, setEditingCash] = useState<ValuedAsset | null>(null);
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
+  const archiveAccount = useMutation({
+    mutationFn: (id: number) => api.delete(`/accounts/${id}`),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["accounts"] });
+      client.invalidateQueries({ queryKey: ["meta"] });
+    },
+  });
+  const restoreAccount = useMutation({
+    mutationFn: (id: number) => api.post(`/accounts/${id}/restore`, {}),
+    onSuccess: () => {
+      client.invalidateQueries({ queryKey: ["accounts"] });
+      client.invalidateQueries({ queryKey: ["meta"] });
+    },
+  });
   const accountLabels: Record<string, string> = {
     investment: "投资账户",
     bank: "银行账户",
@@ -1929,7 +1391,7 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
   const platformGroups = useMemo(() => {
     const map = new Map<
       string,
-      { name: string; accounts: any[]; assets: ValuedAsset[]; value: number }
+      { name: string; accounts: AccountRecord[]; assets: ValuedAsset[]; value: number }
     >();
     for (const account of query.data || []) {
       const name = platformName(account.name);
@@ -1954,11 +1416,25 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
         title="家庭账户"
         description="先按平台汇总，再进入子账户或购买渠道查看具体持仓。"
         action={
-          <button className="primary-button" onClick={() => setOpen(true)}>
-            <Plus size={16} /> 添加账户
-          </button>
+          <div className="button-row">
+            <button className="secondary-button" onClick={() => setShowArchived(!showArchived)}>
+              {showArchived ? "隐藏已归档" : "查看已归档"}
+            </button>
+            <button className="primary-button" onClick={() => setEditingAccount("new")}>
+              <Plus size={16} /> 添加账户
+            </button>
+          </div>
         }
       />
+      {(query.data?.length || 0) > 0 && assets.data?.length === 0 && (
+        <section className="first-use-next" aria-label="下一步：录入资产">
+          <div>
+            <strong>账户已建好，下一步录入第一项资产</strong>
+            <p>可以从一笔现金、基金或股票开始；资产会归属到刚建好的账户。</p>
+          </div>
+          <NavLink className="primary-button" to="/assets">去添加资产 <ChevronRight size={16} aria-hidden="true" /></NavLink>
+        </section>
+      )}
       <div className="account-hierarchy-guide compact" aria-label="账户组织层级">
         <div><b>1</b><span>平台</span><strong>统一汇总入口</strong></div>
         <ChevronRight size={16} />
@@ -1966,6 +1442,9 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
         <ChevronRight size={16} />
         <div><b>3</b><span>持仓</span><strong>具体资产项目</strong></div>
       </div>
+      {(query.error || assets.error) && (
+        <p className="form-error" role="alert">{(query.error || assets.error)?.message}</p>
+      )}
       <div className="account-card-grid">
         {platformGroups.map((platform) => (
           <button
@@ -2002,6 +1481,38 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
             </div>
             <button className="secondary-button" onClick={() => setSelectedPlatform(null)}>收起明细</button>
           </div>
+          {archiveAccount.error && (
+            <p className="form-error" role="alert">{archiveAccount.error.message}</p>
+          )}
+          <div className="responsive-table">
+            <table>
+              <thead>
+                <tr><th>子账户 / 渠道</th><th>类型</th><th>默认币种</th><th>持仓数</th><th>操作</th></tr>
+              </thead>
+              <tbody>
+                {selected.accounts.map((account) => (
+                  <tr key={account.id}>
+                    <td data-label="子账户 / 渠道"><strong>{parseAccountHierarchy(account.name).channelName}</strong><small>{account.name}</small></td>
+                    <td data-label="类型">{accountLabels[account.account_type] || "其他账户"}</td>
+                    <td data-label="默认币种">{account.currency_code || "未设置"}</td>
+                    <td data-label="持仓数">{account.asset_count}</td>
+                    <td data-label="操作">
+                      <div className="row-actions">
+                        <button onClick={() => setEditingAccount(account)} aria-label={`修改 ${account.name}`} title="修改账户"><Edit3 size={15} /></button>
+                        <button
+                          onClick={() => confirm(`归档 ${account.name}？历史记录会保留。`) && archiveAccount.mutate(account.id)}
+                          aria-label={`归档 ${account.name}`}
+                          title={account.asset_count ? "请先处理该账户中的资产" : "归档账户"}
+                          disabled={account.asset_count > 0 || archiveAccount.isPending}
+                        ><Trash2 size={15} /></button>
+                      </div>
+                      {account.asset_count > 0 && <small>先处理持仓后可归档</small>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           {selected.assets.length ? (
             <div className="responsive-table">
               <table>
@@ -2012,6 +1523,7 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
                     <th>类别</th>
                     <th>市值</th>
                     <th>盈亏</th>
+                    <th>操作</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2020,7 +1532,12 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
                     .sort((a, b) => b.marketValueCny - a.marketValueCny)
                     .map((asset) => (
                       <tr key={asset.id}>
-                        <td data-label="资产"><strong>{asset.name}</strong><small>{asset.code}</small></td>
+                        <td data-label="资产">
+                          <strong>{asset.name}</strong><small>{asset.code}</small>
+                          {isCashBalance(asset) && (
+                            <small className={cashConfirmation(asset).stale ? "negative" : ""}>{cashConfirmation(asset).label}</small>
+                          )}
+                        </td>
                         <td data-label="子账户 / 渠道">
                           <strong>{parseAccountHierarchy(asset.accountName).channelName}</strong>
                           <small>{selected.name} 平台</small>
@@ -2031,6 +1548,13 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
                           <span className={asset.profitCny >= 0 ? "positive" : "negative"}>
                             {money(asset.profitCny, privateMode)}
                           </span>
+                        </td>
+                        <td data-label="操作">
+                          {isCashBalance(asset) && (
+                            asset.externalSource === "trading212"
+                              ? <small>由 Trading212 同步</small>
+                              : <button className="secondary-button" onClick={() => setEditingCash(asset)}>更新余额</button>
+                          )}
                         </td>
                       </tr>
                     ))}
@@ -2046,21 +1570,66 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
           )}
         </section>
       )}
-      {!platformGroups.length && (
+      {!platformGroups.length && !query.isPending && !assets.isPending && !query.error && !assets.error && (
         <EmptyState
           icon={<CircleDollarSign />}
           title="还没有账户"
-          text="添加银行、投资、钱包或现金账户。"
+          text="先添加一个银行、投资、钱包或现金账户，再录入第一项资产。"
+          action={<button className="primary-button" onClick={() => setEditingAccount("new")}>添加第一个账户</button>}
         />
       )}
-      {open && meta.data && (
+      {showArchived && (
+        <section className="content-panel no-padding">
+          <div className="detail-head"><div><span>历史账户</span><h3>已归档账户</h3></div></div>
+          {(archivedAccounts.error || restoreAccount.error) && (
+            <p className="form-error" role="alert">{(archivedAccounts.error || restoreAccount.error)?.message}</p>
+          )}
+          {archivedAccounts.data?.length ? (
+            <div className="responsive-table">
+              <table>
+                <thead><tr><th>账户</th><th>类型</th><th>归档时间</th><th>操作</th></tr></thead>
+                <tbody>
+                  {archivedAccounts.data.map((account) => (
+                    <tr key={account.id}>
+                      <td data-label="账户"><strong>{account.name}</strong></td>
+                      <td data-label="类型">{accountLabels[account.account_type] || "其他账户"}</td>
+                      <td data-label="归档时间">{account.archived_at?.slice(0, 10) || "—"}</td>
+                      <td data-label="操作"><button className="secondary-button" disabled={restoreAccount.isPending} onClick={() => restoreAccount.mutate(account.id)}>恢复账户</button></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : !archivedAccounts.isPending && !archivedAccounts.error && (
+            <EmptyState icon={<WalletCards />} title="没有已归档账户" text="归档的账户会显示在这里。" />
+          )}
+        </section>
+      )}
+      {editingAccount && meta.data && (
         <AccountForm
           meta={meta.data}
-          onClose={() => setOpen(false)}
-          onSaved={() => {
-            setOpen(false);
+          account={editingAccount === "new" ? undefined : editingAccount}
+          onClose={() => setEditingAccount(null)}
+          onSaved={(account) => {
+            setEditingAccount(null);
+            setSelectedPlatform(platformName(account.name));
             client.invalidateQueries({ queryKey: ["accounts"] });
             client.invalidateQueries({ queryKey: ["meta"] });
+            client.invalidateQueries({ queryKey: ["assets"] });
+            client.invalidateQueries({ queryKey: ["dashboard"] });
+          }}
+        />
+      )}
+      {editingCash && (
+        <CashBalanceForm
+          asset={editingCash}
+          privateMode={privateMode}
+          onClose={() => setEditingCash(null)}
+          onSaved={() => {
+            setEditingCash(null);
+            client.invalidateQueries({ queryKey: ["assets"] });
+            client.invalidateQueries({ queryKey: ["accounts"] });
+            client.invalidateQueries({ queryKey: ["dashboard"] });
           }}
         />
       )}
@@ -2069,25 +1638,32 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
 }
 
 function AccountForm({
+  account,
   meta,
   onClose,
   onSaved,
 }: {
+  account?: AccountRecord;
   meta: MetaData;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (account: AccountRecord) => void;
 }) {
   const mutation = useMutation({
-    mutationFn: (body: unknown) => api.post("/accounts", body),
+    mutationFn: (body: unknown) => account
+      ? api.patch<AccountRecord>(`/accounts/${account.id}`, body)
+      : api.post<AccountRecord>("/accounts", body),
     onSuccess: onSaved,
   });
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (mutation.isPending) return;
     const f = new FormData(event.currentTarget);
     mutation.mutate({
       name: f.get("name"),
       account_type: f.get("account_type"),
-      default_currency_id: Number(f.get("default_currency_id")),
+      default_currency_id: f.get("default_currency_id")
+        ? Number(f.get("default_currency_id"))
+        : null,
       category:
         f.get("account_type") === "investment"
           ? "投资类"
@@ -2097,21 +1673,21 @@ function AccountForm({
     });
   };
   return (
-    <Modal title="添加家庭账户" onClose={onClose}>
+    <Modal title={account ? "编辑家庭账户" : "添加家庭账户"} onClose={onClose}>
       <form className="form-grid" onSubmit={submit}>
         <label className="span-2">
           <span>平台与子账户 / 渠道名称</span>
           <input
             name="name"
+            defaultValue={account?.name}
             required
-            autoFocus
             placeholder="例如：支付宝 · 基金；独立账户可直接写 Trading212"
           />
           <small className="field-help">推荐格式：平台 · 子账户/购买渠道。没有下级时只填写平台名。</small>
         </label>
         <label>
           <span>账户类型</span>
-          <select name="account_type">
+          <select name="account_type" defaultValue={account?.account_type}>
             {meta.accountTypes.map((x) => (
               <option value={x.code} key={x.code}>
                 {x.label}
@@ -2123,8 +1699,11 @@ function AccountForm({
           <span>默认币种</span>
           <select
             name="default_currency_id"
-            defaultValue={meta.currencies.find((x) => x.code === "CNY")?.id}
+            defaultValue={account
+              ? account.default_currency_id ?? ""
+              : meta.currencies.find((x) => x.code === "CNY")?.id ?? ""}
           >
+            <option value="">未设置</option>
             {meta.currencies.map((x) => (
               <option value={x.id} key={x.id}>
                 {x.code}
@@ -2133,7 +1712,7 @@ function AccountForm({
           </select>
         </label>
         {mutation.error && (
-          <p className="form-error span-2">{mutation.error.message}</p>
+          <p className="form-error span-2" role="alert">{mutation.error.message}</p>
         )}
         <div className="form-actions span-2">
           <button type="button" className="secondary-button" onClick={onClose}>
@@ -2148,6 +1727,11 @@ function AccountForm({
 
 export function StatusPage() {
   const client = useQueryClient();
+  const database = useQuery({
+    queryKey: ["data-health"],
+    queryFn: () => api.get("/meta"),
+    refetchInterval: 60_000,
+  });
   const market = useQuery({
     queryKey: ["market-status"],
     queryFn: () => api.get<any>("/market/status"),
@@ -2156,6 +1740,7 @@ export function StatusPage() {
   const t212 = useQuery({
     queryKey: ["t212-status"],
     queryFn: () => api.get<any>("/integrations/trading212/status"),
+    refetchInterval: 4_000,
   });
   const refresh = useMutation({
     mutationFn: () => api.post("/market/refresh"),
@@ -2166,12 +1751,28 @@ export function StatusPage() {
   });
   const syncT212 = useMutation({
     mutationFn: () => api.post("/integrations/trading212/sync"),
-    onSuccess: () => {
+    onSettled: () => {
       client.invalidateQueries({ queryKey: ["t212-status"] });
       client.invalidateQueries({ queryKey: ["dashboard"] });
       client.invalidateQueries({ queryKey: ["assets"] });
     },
   });
+  const t212Auth = t212.data?.authenticationState;
+  const marketState = market.data?.state;
+  const t212Error = t212Auth === "invalid" || t212.data?.state === "error";
+  const t212Title = t212.isError
+    ? "状态暂时无法读取"
+    : t212.data?.state === "running"
+      ? "正在同步"
+      : t212Auth === "invalid"
+        ? "凭据认证失败"
+        : t212Auth === "valid"
+          ? "最近同步成功"
+          : t212Auth === "not_configured" || !t212.data?.configured
+            ? "等待配置"
+            : t212.data?.state === "error"
+              ? "最近同步失败"
+              : "凭据等待验证";
   return (
     <div className="page-stack">
       <PageHead
@@ -2192,73 +1793,86 @@ export function StatusPage() {
           </button>
         }
       />
+      {refresh.isError && <p className="form-error" role="alert">行情刷新失败：{refresh.error.message}</p>}
       <div className="status-grid">
         <article className="status-card">
-          <div className="status-icon healthy">
+          <div className={`status-icon ${database.isError ? "warning" : database.isSuccess ? "healthy" : "neutral"}`}>
             <ShieldCheck />
           </div>
           <div>
             <span>Stone Wealth 数据库</span>
-            <h3>运行正常</h3>
-            <p>迁移已应用，业务数据保存在本地 SQLite。</p>
+            <h3>{database.isError ? "暂时无法读取" : database.isSuccess ? "运行正常" : "正在检查"}</h3>
+            <p>{database.isError ? "请检查数据服务后重试。" : "业务数据保存在 SQLite，当前页面已核对数据读取。"}</p>
           </div>
-          <b className="status fresh">正常</b>
+          <b className={`status ${database.isError ? "error" : database.isSuccess ? "fresh" : "missing"}`}>
+            {database.isError ? "异常" : database.isSuccess ? "正常" : "检查中"}
+          </b>
         </article>
         <article className="status-card">
           <div
-            className={`status-icon ${market.data?.state === "error" ? "warning" : "healthy"}`}
+            className={`status-icon ${market.isError || marketState === "error" ? "warning" : marketState === "success" ? "healthy" : "neutral"}`}
           >
             <RefreshCw />
           </div>
           <div>
             <span>市场行情与汇率</span>
             <h3>
-              {market.data?.state === "running"
+              {market.isError
+                ? "状态暂时无法读取"
+                : marketState === "running"
                 ? "正在同步"
-                : market.data?.state === "error"
+                : marketState === "error"
                   ? "部分异常"
-                  : "缓存可用"}
+                  : marketState === "success" ? "最近更新完成" : market.isSuccess ? "等待首次更新" : "正在检查"}
             </h3>
             <p>
-              {market.data?.finishedAt
+              {market.data?.state === "error" && market.data?.message
+                ? market.data.message
+                : market.data?.finishedAt
                 ? `最近完成 ${new Date(market.data.finishedAt).toLocaleString("zh-CN")}`
                 : "后台每 30 分钟更新资产价格。"}
             </p>
           </div>
           <b
-            className={`status ${market.data?.state === "error" ? "error" : "fresh"}`}
+            className={`status ${market.isError || marketState === "error" ? "error" : marketState === "success" ? "fresh" : "missing"}`}
           >
-            {market.data?.updated || 0} 成功 / {market.data?.failed || 0} 失败
+            {market.isError ? "无法读取" : marketState === "error" ? "需关注" : marketState === "running" ? "更新中" : marketState === "success" ? `${market.data?.updated || 0} 成功 / ${market.data?.failed || 0} 失败` : "待更新"}
           </b>
         </article>
         <article className="status-card">
           <div
-            className={`status-icon ${t212.data?.configured ? "healthy" : "neutral"}`}
+            className={`status-icon ${t212Error || t212.isError ? "warning" : t212Auth === "valid" ? "healthy" : "neutral"}`}
           >
             <Landmark />
           </div>
           <div>
             <span>Trading212</span>
-            <h3>{t212.data?.configured ? "凭据已配置" : "等待配置"}</h3>
+            <h3>{t212Title}</h3>
             <p>
-              {t212.data?.aggregateFallback
-                ? "当前保留账户总值作为待分类资产，详细同步成功后再归档。"
-                : "未检测到账户汇总记录。"}
+              {t212.isError
+                ? "请检查本地服务后重试。"
+                : t212Auth === "invalid"
+                  ? "API 凭据被拒绝，请更新配置后重试；现有资产数据已保留。"
+                  : t212.data?.message || (t212.data?.configured ? "可手动发起同步与对账。" : "配置 API 凭据后可同步投资账户。")}
             </p>
+            {t212.data?.aggregateFallback && (
+              <p>账户汇总备用值仍列为待分类资产，详细同步成功后再归档。</p>
+            )}
             {t212.data?.configured && (
               <button
                 className="secondary-button compact-button"
-                disabled={syncT212.isPending}
+                disabled={syncT212.isPending || t212.data?.state === "running"}
                 onClick={() => syncT212.mutate()}
               >
-                {syncT212.isPending ? "正在对账" : "同步并对账"}
+                {syncT212.isPending || t212.data?.state === "running" ? "正在对账" : "重新同步并对账"}
               </button>
             )}
+            {syncT212.isError && <p className="form-error" role="alert">{syncT212.error.message}</p>}
           </div>
           <b
-            className={`status ${t212.data?.configured ? "fresh" : "missing"}`}
+            className={`status ${t212Error || t212.isError ? "error" : t212Auth === "valid" ? "fresh" : "missing"}`}
           >
-            {t212.data?.detailedSyncAvailable ? "可同步" : "未连接"}
+            {t212.isError ? "无法读取" : t212Auth === "valid" ? "已验证" : t212Auth === "invalid" ? "认证失败" : "待验证"}
           </b>
         </article>
       </div>

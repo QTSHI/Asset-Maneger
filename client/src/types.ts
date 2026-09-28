@@ -26,6 +26,8 @@ export interface ValuedAsset {
   importedMarketValue?: number | null;
   importedCostValue?: number | null;
   valuationAsOf?: string | null;
+  cashConfirmedAt?: string | null;
+  externalSource?: string | null;
   valuationBasis: "unit_price" | "imported_position" | "reference_only";
   currency: string;
   marketValueCny: number;
@@ -53,78 +55,6 @@ export interface ValuedAsset {
   };
 }
 
-export interface HouseholdSummary {
-  month: string;
-  totals: {
-    income: number;
-    expense: number;
-    net: number;
-    plannedExpense: number;
-    remainingBudget: number;
-  };
-  navigation: {
-    previousPlannedMonth: string | null;
-    nextPlannedMonth: string | null;
-  };
-  budgets: Array<{
-    id: number;
-    categoryId: number;
-    categoryName: string;
-    kind: "income" | "expense";
-    color: string;
-    planned: number;
-    actual: number;
-    remaining: number;
-    percent: number;
-  }>;
-  recentTransactions: HouseholdTransaction[];
-  projects: HouseholdProject[];
-  memos: FinancialMemo[];
-}
-
-export interface HouseholdPlan {
-  settings: {
-    openingAmount: number;
-    openingCurrencyId: number;
-    openingCurrencyCode: string;
-    planningRateToCny: number;
-    startMonth: string;
-    endMonth: string;
-  };
-  livingExpenseBasis: {
-    categoryId: number;
-    categoryName: string;
-    basisCurrencyCode: "CNY";
-    monthlyAmountCny: number;
-    monthlyAmountInOpeningCurrency: number;
-    openingCurrencyCode: string;
-    plannedMonths: number;
-    source: "monthly_budget";
-  } | null;
-  totals: {
-    openingBalanceCny: number;
-    plannedIncomeCny: number;
-    plannedExpenseCny: number;
-    memoIncomeCny: number;
-    memoExpenseCny: number;
-    projectedClosingBalanceCny: number;
-    firstNegativeMonth?: string | null;
-  };
-  months: Array<{
-    month: string;
-    status: "actual" | "current" | "forecast";
-    openingBalanceCny: number;
-    plannedIncomeCny: number;
-    plannedExpenseCny: number;
-    actualIncomeCny: number;
-    actualExpenseCny: number;
-    memoIncomeCny: number;
-    memoExpenseCny: number;
-    projectedNetCny: number;
-    closingBalanceCny: number;
-  }>;
-}
-
 export interface HouseholdTransaction {
   id: number;
   kind: "income" | "expense";
@@ -138,40 +68,9 @@ export interface HouseholdTransaction {
   category_color: string;
   account_id?: number | null;
   account_name?: string | null;
-  project_id?: number | null;
-  project_name?: string | null;
   occurred_on: string;
   note?: string;
   linked_cash_flow_id?: number | null;
-}
-
-export interface HouseholdProject {
-  id: number;
-  name: string;
-  target_amount_cny: number;
-  spent_cny: number;
-  remaining_cny: number;
-  progress: number;
-  start_date?: string;
-  end_date?: string;
-  status: "planned" | "active" | "completed" | "cancelled";
-  note?: string;
-}
-
-export interface FinancialMemo {
-  id: number;
-  kind: "income" | "expense";
-  title: string;
-  expected_amount: number;
-  currency_code: string;
-  due_date: string;
-  reminder_days: number;
-  category_id?: number | null;
-  account_id?: number | null;
-  status?: "pending" | "completed" | "cancelled";
-  display_status: "pending" | "upcoming" | "overdue";
-  days_until: number;
-  note?: string;
 }
 
 export interface DashboardData {
@@ -200,7 +99,6 @@ export interface DashboardData {
     totalCount: number;
     market: { state: string; finishedAt?: string | null };
   };
-  household: HouseholdSummary;
 }
 
 export interface MetaData {
