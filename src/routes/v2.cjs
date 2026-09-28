@@ -3,6 +3,7 @@ const { z } = require('zod');
 const db = require('../services/database.cjs');
 const wealth = require('../services/wealthService.cjs');
 const trading212 = require('../services/trading212Service.cjs');
+const agent = require('../services/agentService.cjs');
 
 const router = express.Router();
 
@@ -96,6 +97,79 @@ const assetCreateSchema = z.object({
   valuation_as_of: dateString.nullable().optional()
 });
 const assetPatchSchema = assetCreateSchema.partial();
+
+function requireWebsiteUser(req, res, next) {
+  if (!req.user?.username || req.user.username === 'unknown') {
+    return fail(res, 401, 'AUTH_REQUIRED', '需要先通过统一登录验证身份');
+  }
+  next();
+}
+
+function requireSameOrigin(req, res, next) {
+  const origin = req.get('origin');
+  const host = req.get('host');
+  let allowed = false;
+  try {
+    const parsed = new URL(origin);
+    const publicOrigin = process.env.ASSET_TRACKER_PUBLIC_ORIGIN || 'https://asset.stoneking.top';
+    // The reverse proxy may pass its internal Host to Express, so also accept
+    // the configured public website origin when it matches exactly.
+    allowed = parsed.origin === publicOrigin || parsed.host === host &&
+      (parsed.protocol === 'https:' ||
+        (process.env.NODE_ENV !== 'production' && parsed.protocol === 'http:'));
+    // The local Vite proxy forwards requests to port 8080 while the browser
+    // remains on port 5173. Keep this exception limited to loopback previews.
+    if (!allowed && process.env.NODE_ENV === 'development') {
+      const destination = new URL(`http://${host}`);
+      allowed = parsed.protocol === 'http:' &&
+        ['localhost', '127.0.0.1'].includes(parsed.hostname) &&
+        parsed.hostname === destination.hostname &&
+        ['localhost', '127.0.0.1'].includes(destination.hostname);
+    }
+  } catch (_) {
+    allowed = false;
+  }
+  if (!allowed) return fail(res, 403, 'ORIGIN_MISMATCH', '请在本网站中确认此操作');
+  next();
+}
+
+router.use('/agent', requireWebsiteUser);
+
+router.get('/agent/proposals', handler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  const result = agent.listProposals(username(req), req.query.status, req.query);
+  ok(res, result.items, { total: result.total, page: result.page, pageSize: result.pageSize });
+}));
+
+router.post('/agent/proposals/:id/approve', requireSameOrigin, handler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  ok(res, agent.approveProposal(parse(idSchema, req.params.id), username(req)));
+}));
+
+router.post('/agent/proposals/:id/reject', requireSameOrigin, handler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  ok(res, agent.rejectProposal(parse(idSchema, req.params.id), username(req)));
+}));
+
+router.get('/agent/keys', handler(async (req, res) => {
+  res.set('Cache-Control', 'no-store');
+  sendList(res, agent.listAgentKeys(username(req)));
+}));
+
+router.post('/agent/keys', requireSameOrigin, handler(async (req, res) => {
+  const input = parse(z.object({
+    label: z.string().trim().min(1).max(80),
+    expiresInDays: z.number().int().min(1).max(365).optional()
+  }).strict(), req.body);
+  res.set('Cache-Control', 'no-store');
+  res.status(201);
+  ok(res, agent.createAgentKey(username(req), input.label, input.expiresInDays));
+}));
+
+router.delete('/agent/keys/:id', requireSameOrigin, handler(async (req, res) => {
+  agent.revokeAgentKey(parse(idSchema, req.params.id), username(req));
+  res.status(204).end();
+}));
 
 router.get('/dashboard', handler(async (req, res) => {
   ok(res, wealth.getDashboard({ range: req.query.range }));

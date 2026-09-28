@@ -11,6 +11,8 @@ const fs = require('fs');
 const db = require('./services/database.cjs');
 const { updateExchangeRates, getPrice, getExchangeRates, convertCurrency } = require('./services/priceFetcher.cjs');
 const wealthService = require('./services/wealthService.cjs');
+const agentService = require('./services/agentService.cjs');
+const { createMcpRouter } = require('./mcp.cjs');
 const v2Router = require('./routes/v2.cjs');
 const { PORT, EXCHANGE_RATE_INTERVAL } = require('./config/constants.cjs');
 
@@ -66,6 +68,14 @@ function isApiRequest(req) {
 const app = express();
 app.use(compression());
 app.use(express.json());
+// Agent keys have a separate entry point and are never treated as website SSO credentials.
+app.use('/mcp', createMcpRouter(agentService));
+app.use('/api/v2', (req, res, next) => {
+    if (/^Bearer(?:\s|$)/i.test(req.get('authorization') || '')) {
+        return res.status(401).json({ error: 'Bearer credentials are not accepted by the website API' });
+    }
+    next();
+});
 
 app.use((req, res, next) => {
     req.cookies = {};

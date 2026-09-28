@@ -382,6 +382,50 @@ const migrations = [
       // Keep this null until a deliberate balance confirmation occurs.
       ensureColumn(db, 'assets', 'cash_confirmed_at DATETIME');
     }
+  },
+  {
+    version: '007_agent_asset_proposals',
+    run(db) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_api_keys (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          owner_username TEXT NOT NULL,
+          label TEXT NOT NULL,
+          token_hash TEXT NOT NULL UNIQUE,
+          token_prefix TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          expires_at TEXT NOT NULL,
+          revoked_at TEXT,
+          last_used_at TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_api_keys_owner
+          ON agent_api_keys(owner_username, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS agent_asset_proposals (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          owner_username TEXT NOT NULL,
+          asset_id INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending'
+            CHECK(status IN ('pending','approved','rejected','conflicted')),
+          before_json TEXT NOT NULL,
+          patch_json TEXT NOT NULL,
+          idempotency_key TEXT,
+          created_at TEXT NOT NULL,
+          reviewed_at TEXT,
+          reviewer_username TEXT,
+          UNIQUE(owner_username, idempotency_key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_agent_asset_proposals_owner
+          ON agent_asset_proposals(owner_username, status, created_at DESC);
+      `);
+    }
+  },
+  {
+    version: '008_agent_proposal_key_attribution',
+    run(db) {
+      ensureColumn(db, 'agent_asset_proposals', 'agent_key_id INTEGER REFERENCES agent_api_keys(id)');
+      db.exec('CREATE INDEX IF NOT EXISTS idx_agent_asset_proposals_key ON agent_asset_proposals(agent_key_id)');
+    }
   }
 ];
 

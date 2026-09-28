@@ -18,6 +18,7 @@ import {
   Moon,
   RefreshCw,
   Settings2,
+  ShieldCheck,
   Sun,
   WalletCards,
 } from "lucide-react";
@@ -37,6 +38,7 @@ const StatusPage = lazy(() =>
 const TransactionsPage = lazy(() =>
   loadPages().then(({ TransactionsPage }) => ({ default: TransactionsPage })),
 );
+const AgentPage = lazy(() => import("./agentPage"));
 
 const nav = [
   { label: "总览", mobileLabel: "总览", icon: LayoutDashboard, path: "/" },
@@ -49,12 +51,13 @@ const nav = [
   },
   { label: "账户", mobileLabel: "账户", icon: CircleDollarSign, path: "/accounts" },
   { label: "数据状态", mobileLabel: "状态", icon: Gauge, path: "/status" },
+  { label: "Agent 授权", mobileLabel: "Agent", icon: ShieldCheck, path: "/agent" },
 ];
 
 function MobileNavigation() {
   return (
     <nav className="mobile-nav" aria-label="移动端导航">
-      {nav.map((item) => (
+      {nav.filter((item) => item.path !== "/agent").map((item) => (
         <NavLink
           className={({ isActive }) => (isActive ? "active" : "")}
           end={item.path === "/"}
@@ -129,6 +132,14 @@ function App() {
             <h1>{greeting}，欢迎回家</h1>
           </div>
           <div className="top-actions">
+            <NavLink
+              className={({ isActive }) => `icon-button agent-access-button${isActive ? " active" : ""}`}
+              aria-label="Agent 授权"
+              title="Agent 授权"
+              to="/agent"
+            >
+              <ShieldCheck aria-hidden="true" />
+            </NavLink>
             <button
               className="icon-button"
               aria-label="隐私模式"
@@ -161,6 +172,7 @@ function App() {
               element={<AccountsPage privateMode={privateMode} />}
             />
             <Route path="/status" element={<StatusPage />} />
+            <Route path="/agent" element={<AgentPage privateMode={privateMode} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
