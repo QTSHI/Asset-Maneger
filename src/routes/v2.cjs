@@ -15,6 +15,12 @@ function fail(res, status, code, message, fields) {
   return res.status(status).json({ error: { code, message, ...(fields ? { fields } : {}) } });
 }
 
+// These unfinished modules are withdrawn from the single-household release.
+// Keep their historical tables for a future redesign, but reject old clients too.
+for (const path of ['/household/budgets', '/household/plan', '/household/projects', '/household/memos']) {
+  router.use(path, (_req, res) => fail(res, 410, 'MODULE_RETIRED', '该功能已暂时下线'));
+}
+
 function parse(schema, value) {
   const result = schema.safeParse(value);
   if (!result.success) {

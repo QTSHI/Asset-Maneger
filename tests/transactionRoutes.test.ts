@@ -104,39 +104,6 @@ describe('household transaction and asset cash-flow consistency', () => {
       .toMatchObject({ kind: 'expense', amount_cny: 15 });
   });
 
-  it('rejects a plan period beyond the supported 120 months', async () => {
-    const cny = db.prepare("SELECT id FROM currencies WHERE code = 'CNY'").get().id;
-    const response = await request('/household/plan/settings', 'PUT', {
-      opening_amount: 0, opening_currency_id: cny, planning_rate_to_cny: 1,
-      start_month: '2033-01', end_month: '2043-01',
-    });
-    expect(response.status).toBe(400);
-    expect(response.payload.error.fields.end_month).toContain('120 个月');
-    expect(db.prepare('SELECT start_month FROM household_plan_settings WHERE id = 1').get()?.start_month).not.toBe('2033-01');
-  });
-
-  it('requires an explicit rate before completing an unfamiliar foreign-currency memo', async () => {
-    const unknown = Number(db.prepare("SELECT id FROM currencies WHERE code = 'ZZZ'").get()?.id
-      ?? db.prepare("INSERT INTO currencies (code) VALUES ('ZZZ')").run().lastInsertRowid);
-    const expense = db.prepare("SELECT id FROM household_categories WHERE kind = 'expense' LIMIT 1").get().id;
-    const memoId = Number(db.prepare(`
-      INSERT INTO financial_memos (kind, title, expected_amount, currency_id, due_date, category_id)
-      VALUES ('expense', 'Foreign memo test', 100, ?, '2033-05-01', ?)
-    `).run(unknown, expense).lastInsertRowid);
-
-    const noRate = await request(`/household/memos/${memoId}/complete`, 'POST', { create_transaction: true });
-    expect(noRate.status).toBe(400);
-    expect(noRate.payload.error.code).toBe('FX_RATE_REQUIRED');
-    expect(db.prepare('SELECT status FROM financial_memos WHERE id = ?').get(memoId).status).toBe('pending');
-
-    const completed = await request(`/household/memos/${memoId}/complete`, 'POST', {
-      create_transaction: true, fx_rate_to_cny: 3,
-    });
-    expect(completed.status).toBe(200);
-    expect(db.prepare('SELECT amount_cny FROM household_transactions WHERE id = ?')
-      .get(completed.payload.data.transactionId).amount_cny).toBe(300);
-  });
-
   it('removes a direct cash-flow link without deleting the recorded flow', async () => {
     const cny = db.prepare("SELECT id FROM currencies WHERE code = 'CNY'").get().id;
     const expense = db.prepare("SELECT id FROM household_categories WHERE kind = 'expense' LIMIT 1").get().id;
@@ -154,16 +121,5 @@ describe('household transaction and asset cash-flow consistency', () => {
     expect(db.prepare('SELECT linked_cash_flow_id FROM household_transactions WHERE id = ?').get(id).linked_cash_flow_id).toBeNull();
     expect(db.prepare('SELECT amount, source_transaction_id, archived_at FROM cash_flows WHERE id = ?').get(flowId))
       .toMatchObject({ amount: 24, source_transaction_id: null, archived_at: null });
-  });
-
-  it('keeps the CNY plan opening rate at one', async () => {
-    const cny = db.prepare("SELECT id FROM currencies WHERE code = 'CNY'").get().id;
-    const response = await request('/household/plan/settings', 'PUT', {
-      opening_amount: 1000, opening_currency_id: cny, planning_rate_to_cny: 7,
-      start_month: '2033-01', end_month: '2033-12',
-    });
-    expect(response.status).toBe(400);
-    expect(response.payload.error.code).toBe('INVALID_FX_RATE');
-    expect(db.prepare('SELECT planning_rate_to_cny FROM household_plan_settings WHERE id = 1').get()?.planning_rate_to_cny).not.toBe(7);
   });
 });

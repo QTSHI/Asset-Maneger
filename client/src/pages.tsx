@@ -318,7 +318,7 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
         eyebrow="Asset intelligence"
         title="家庭资产"
         description="先看资产类别，再按平台、子账户或购买渠道进入具体持仓。"
-        action={!isFirstAsset && (needsAccount
+        action={!assets.isPending && !assets.isError && !isFirstAsset && (needsAccount
           ? <NavLink className="primary-button" to="/accounts"><Plus size={16} /> 先添加账户</NavLink>
           : <button className="primary-button" onClick={() => setEditing("new")} disabled={!meta.data}>
               <Plus size={16} /> 添加资产
@@ -330,7 +330,15 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
           <button className="link-button" onClick={() => meta.refetch()}>重新加载</button>
         </p>
       )}
-      {isFirstAsset ? (
+      {assets.isPending ? (
+        <div className="state-card" role="status">正在加载资产…</div>
+      ) : assets.isError ? (
+        <div className="state-card" role="alert">
+          <strong>暂时无法读取资产</strong>
+          <span>{assets.error.message}</span>
+          <button type="button" onClick={() => assets.refetch()}>重试读取资产</button>
+        </div>
+      ) : isFirstAsset ? (
         <EmptyState
           icon={<Landmark />}
           title={needsAccount ? "先添加一个账户" : "还没有资产"}
@@ -880,7 +888,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
           </button>
         }
       />
-      <div className="summary-strip">
+      {query.isSuccess && <div className="summary-strip">
         <div>
           <span>该月收入</span>
           <strong className="positive">{money(income, privateMode)}</strong>
@@ -897,7 +905,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
           <span>{selectedCategory ? "筛选记录" : "记录数量"}</span>
           <strong>{visibleRows.length}</strong>
         </div>
-      </div>
+      </div>}
       <div className="toolbar">
         <MonthNavigator month={month} onChange={setMonth} label="收支月份" />
         <label className="filter-button">
@@ -917,6 +925,15 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
           </select>
         </label>
       </div>
+      {query.isPending && <div className="state-card" role="status">正在加载收支记录…</div>}
+      {query.isError && (
+        <div className="state-card" role="alert">
+          <strong>暂时无法读取收支记录</strong>
+          <span>{query.error.message}</span>
+          <button type="button" onClick={() => query.refetch()}>重试读取收支记录</button>
+        </div>
+      )}
+      {query.isSuccess && <>
       <div className="cash-flow-explainer">
         <Link2 size={18} />
         <div>
@@ -1018,6 +1035,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
           />
         )}
       </section>
+      </>}
       {editing && meta.data && (
         <TransactionForm
           meta={meta.data}

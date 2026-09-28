@@ -124,6 +124,32 @@ describe('retired legacy writes', () => {
   });
 });
 
+describe('withdrawn household modules', () => {
+  it('rejects old budget, plan, project, and reminder API calls without creating records', async () => {
+    const requests: Array<[string, string, unknown?]> = [
+      ['/api/v2/household/budgets', 'GET'],
+      ['/api/v2/household/budgets', 'PUT', { month: '2026-09', items: [] }],
+      ['/api/v2/household/budgets/copy', 'POST', { fromMonth: '2026-08', toMonth: '2026-09' }],
+      ['/api/v2/household/plan', 'GET'],
+      ['/api/v2/household/plan/settings', 'PUT', {}],
+      ['/api/v2/household/projects', 'POST', {}],
+      ['/api/v2/household/projects/1', 'DELETE'],
+      ['/api/v2/household/memos', 'POST', {}],
+      ['/api/v2/household/memos/1/complete', 'POST', {}],
+    ];
+
+    for (const [route, method, body] of requests) {
+      const result = await request(route, method, body);
+      expect(result.status).toBe(410);
+      expect(result.payload.error.code).toBe('MODULE_RETIRED');
+    }
+
+    for (const table of ['monthly_budgets', 'household_projects', 'financial_memos']) {
+      expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get().count).toBe(0);
+    }
+  });
+});
+
 describe('development database isolation', () => {
   it('refuses an unset path, the production path, and an alias before opening the database', () => {
     // Run a copy in a disposable project layout so this test can never open the real database.
