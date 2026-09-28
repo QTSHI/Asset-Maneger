@@ -522,7 +522,7 @@ function getTrend(range = '3M') {
   }));
 }
 
-function getDashboard({ month, range } = {}) {
+function getDashboard({ range } = {}) {
   const assets = valueAssets();
   const totalMarket = assets.reduce((sum, asset) => sum.plus(asset.marketValueCny), new Decimal(0));
   const totalCost = assets.reduce((sum, asset) => sum.plus(asset.costValueCny), new Decimal(0));
@@ -549,8 +549,7 @@ function getDashboard({ month, range } = {}) {
     trend: getTrend(range),
     topAccounts: accountAllocation.slice(0, 6),
     recentAssets: assets.slice(0, 6),
-    freshness: { staleCount, totalCount: assets.length, market: marketStatus },
-    household: getHouseholdSummary(month)
+    freshness: { staleCount, totalCount: assets.length, market: marketStatus }
   };
 }
 

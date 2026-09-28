@@ -1,6 +1,6 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { NavLink, Navigate, Route, Routes } from "react-router-dom";
 import {
   Cell,
   Pie,
@@ -9,8 +9,6 @@ import {
   Tooltip,
 } from "recharts";
 import {
-  Bell,
-  ChevronRight,
   CircleDollarSign,
   Eye,
   EyeOff,
@@ -18,15 +16,12 @@ import {
   Landmark,
   LayoutDashboard,
   Moon,
-  MoreHorizontal,
-  PiggyBank,
   RefreshCw,
   Settings2,
   Sun,
   WalletCards,
 } from "lucide-react";
 import { api } from "./api";
-import { currentMonth, MonthNavigator, monthLabel } from "./dateControls";
 import type { DashboardData } from "./types";
 
 const loadPages = () => import("./pages");
@@ -35,12 +30,6 @@ const AccountsPage = lazy(() =>
 );
 const AssetsPage = lazy(() =>
   loadPages().then(({ AssetsPage }) => ({ default: AssetsPage })),
-);
-const BudgetPage = lazy(() =>
-  loadPages().then(({ BudgetPage }) => ({ default: BudgetPage })),
-);
-const PlansPage = lazy(() =>
-  loadPages().then(({ PlansPage }) => ({ default: PlansPage })),
 );
 const StatusPage = lazy(() =>
   loadPages().then(({ StatusPage }) => ({ default: StatusPage })),
@@ -52,54 +41,20 @@ const TransactionsPage = lazy(() =>
 const nav = [
   { label: "总览", mobileLabel: "总览", icon: LayoutDashboard, path: "/" },
   { label: "资产", mobileLabel: "资产", icon: Landmark, path: "/assets" },
-  { label: "家庭预算", mobileLabel: "预算", icon: PiggyBank, path: "/budget" },
   {
     label: "收支记录",
     mobileLabel: "收支",
     icon: WalletCards,
     path: "/transactions",
   },
-  { label: "计划与提醒", mobileLabel: "计划", icon: Bell, path: "/plans" },
   { label: "账户", mobileLabel: "账户", icon: CircleDollarSign, path: "/accounts" },
   { label: "数据状态", mobileLabel: "状态", icon: Gauge, path: "/status" },
 ];
 
 function MobileNavigation() {
-  const { pathname } = useLocation();
-  const [moreOpen, setMoreOpen] = useState(false);
-  const navRef = useRef<HTMLElement>(null);
-  const moreButtonRef = useRef<HTMLButtonElement>(null);
-  const activeMorePage = nav.slice(5).find((item) => item.path === pathname);
-
-  useEffect(() => setMoreOpen(false), [pathname]);
-  useEffect(() => {
-    if (!moreOpen) return;
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        setMoreOpen(false);
-        moreButtonRef.current?.focus();
-      }
-    };
-    const onPointerDown = (event: PointerEvent) => {
-      if (
-        event.target instanceof Node &&
-        !navRef.current?.contains(event.target)
-      ) {
-        setMoreOpen(false);
-      }
-    };
-    document.addEventListener("keydown", onKeyDown);
-    document.addEventListener("pointerdown", onPointerDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      document.removeEventListener("pointerdown", onPointerDown);
-    };
-  }, [moreOpen]);
-
   return (
-    <nav className="mobile-nav" aria-label="移动端导航" ref={navRef}>
-      {nav.slice(0, 5).map((item) => (
+    <nav className="mobile-nav" aria-label="移动端导航">
+      {nav.map((item) => (
         <NavLink
           className={({ isActive }) => (isActive ? "active" : "")}
           end={item.path === "/"}
@@ -110,33 +65,6 @@ function MobileNavigation() {
           <span>{item.mobileLabel}</span>
         </NavLink>
       ))}
-      <button
-        ref={moreButtonRef}
-        type="button"
-        className={`mobile-more-trigger${activeMorePage ? " active" : ""}`}
-        aria-controls="mobile-more-panel"
-        aria-expanded={moreOpen}
-        aria-label={activeMorePage ? `更多页面，当前是${activeMorePage.label}` : "更多页面"}
-        onClick={() => setMoreOpen((open) => !open)}
-      >
-        <MoreHorizontal size={20} aria-hidden="true" />
-        <span>更多</span>
-      </button>
-      <div className="mobile-more-panel" id="mobile-more-panel" hidden={!moreOpen}>
-        <span className="mobile-more-title">更多页面</span>
-        {nav.slice(5).map((item) => (
-          <NavLink
-            className={({ isActive }) => (isActive ? "active" : "")}
-            to={item.path}
-            key={item.label}
-            onClick={() => setMoreOpen(false)}
-          >
-            <item.icon size={19} aria-hidden="true" />
-            <span>{item.label}</span>
-            <ChevronRight size={17} aria-hidden="true" />
-          </NavLink>
-        ))}
-      </div>
     </nav>
   );
 }
@@ -225,22 +153,15 @@ function App() {
               element={<AssetsPage privateMode={privateMode} />}
             />
             <Route
-              path="/budget"
-              element={<BudgetPage privateMode={privateMode} />}
-            />
-            <Route
               path="/transactions"
               element={<TransactionsPage privateMode={privateMode} />}
-            />
-            <Route
-              path="/plans"
-              element={<PlansPage privateMode={privateMode} />}
             />
             <Route
               path="/accounts"
               element={<AccountsPage privateMode={privateMode} />}
             />
             <Route path="/status" element={<StatusPage />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </Suspense>
       </main>
@@ -250,10 +171,9 @@ function App() {
 }
 
 function Dashboard({ privateMode }: { privateMode: boolean }) {
-  const [month, setMonth] = useState(currentMonth());
   const query = useQuery({
-    queryKey: ["dashboard", month],
-    queryFn: () => api.get<DashboardData>(`/dashboard?month=${month}&range=3M`),
+    queryKey: ["dashboard"],
+    queryFn: () => api.get<DashboardData>("/dashboard"),
   });
   const data = query.data;
 
@@ -298,19 +218,8 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
   const unclassified = data.allocations.byClass.find(
     (item) => item.code === "unclassified",
   );
-  const plannedExpenseCategories = data.household.budgets.filter(
-    (item) => item.kind === "expense" && item.planned > 0,
-  );
-
   return (
     <div className="dashboard-grid">
-      <section className="dashboard-period">
-        <div>
-          <span>家庭财务月份</span>
-          <strong>{monthLabel(month)}</strong>
-        </div>
-        <MonthNavigator month={month} onChange={setMonth} />
-      </section>
       <section className="hero-card">
         <div className="hero-head">
           <div>
@@ -403,56 +312,6 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
         </div>
       </section>
 
-      <section className="panel budget-panel">
-        <PanelTitle
-          title="家庭预算"
-          subtitle={data.household.month.replace("-", " 年 ") + " 月"}
-          action={
-            <NavLink
-              className="text-button"
-              to="/budget"
-              style={{ textDecoration: "none" }}
-            >
-              管理预算 <ChevronRight size={15} />
-            </NavLink>
-          }
-        />
-        <div className="budget-summary">
-          <div>
-            <span>已支出</span>
-            <strong>{currency(data.household.totals.expense)}</strong>
-          </div>
-          <div>
-            <span>预算剩余</span>
-            <strong>{currency(data.household.totals.remainingBudget)}</strong>
-          </div>
-        </div>
-        <div className="budget-progress">
-          <i
-            style={{
-              width: `${Math.min(100, data.household.totals.plannedExpense > 0 ? (data.household.totals.expense / data.household.totals.plannedExpense) * 100 : 0)}%`,
-            }}
-          />
-        </div>
-        <div className="budget-categories">
-          {plannedExpenseCategories.slice(0, 4).map((item) => (
-            <div key={item.id}>
-              <i style={{ background: item.color }} />
-              <span>{item.categoryName}</span>
-              <strong>
-                {currency(item.actual, true)} / {currency(item.planned, true)}
-              </strong>
-            </div>
-          ))}
-          {!plannedExpenseCategories.length && (
-            <div className="empty-inline">
-              <PiggyBank size={20} />
-              <span>还没有预算，先为这个月做个轻量计划</span>
-            </div>
-          )}
-        </div>
-      </section>
-
       <section className="panel account-panel">
         <PanelTitle title="主要账户" subtitle="按市值排序" />
         <div className="account-list">
@@ -466,52 +325,6 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
               <span>{currency(item.valueCny, true)}</span>
             </div>
           ))}
-        </div>
-      </section>
-
-      <section className="panel reminder-panel">
-        <PanelTitle
-          title="近期大额事项"
-          subtitle="逾期与未来 30 天"
-          action={
-            <NavLink
-              className="round-button"
-              to="/plans"
-              aria-label="查看大额事项提醒"
-            >
-              <Bell size={16} />
-            </NavLink>
-          }
-        />
-        <div className="memo-list">
-          {data.household.memos.slice(0, 4).map((memo) => (
-            <div className={memo.display_status} key={memo.id}>
-              <div className="memo-date">
-                <strong>{memo.due_date.slice(8)}</strong>
-                <span>{memo.due_date.slice(5, 7)}月</span>
-              </div>
-              <div>
-                <strong>{memo.title}</strong>
-                <span>
-                  {memo.display_status === "overdue"
-                    ? "已逾期"
-                    : memo.days_until === 0
-                      ? "今天"
-                      : `${memo.days_until} 天后`}
-                </span>
-              </div>
-              <b>
-                {memo.kind === "expense" ? "-" : "+"}
-                {currency(memo.expected_amount, true, memo.currency_code)}
-              </b>
-            </div>
-          ))}
-          {!data.household.memos.length && (
-            <div className="empty-inline">
-              <Bell size={20} />
-              <span>没有逾期或未来 30 天内待处理的大额事项</span>
-            </div>
-          )}
         </div>
       </section>
 

@@ -152,10 +152,12 @@ describe('Stone Wealth data model', () => {
     const account = db.prepare("SELECT id FROM platforms WHERE name='Test Bank'").get().id;
     db.prepare(`INSERT INTO household_transactions (kind, amount, currency_id, fx_rate_to_cny, amount_cny, category_id, account_id, occurred_on) VALUES ('expense', 80, ?, 1, 80, ?, ?, '2026-08-10')`)
       .run(cny, category, account);
-    const dashboard = wealth.getDashboard({ month: '2026-08', range: 'ALL' });
-    expect(dashboard.household.totals.expense).toBe(80);
+    const dashboard = wealth.getDashboard({ range: 'ALL' });
     expect(dashboard.totals.marketValueCny).toBe(1000);
-    const categorySummary = dashboard.household.budgets.find((row: any) => row.categoryId === category);
+    expect(dashboard.household).toBeUndefined();
+    const summary = wealth.getHouseholdSummary('2026-08');
+    expect(summary.totals.expense).toBe(80);
+    const categorySummary = summary.budgets.find((row: any) => row.categoryId === category);
     expect(categorySummary).toMatchObject({ planned: 0, actual: 80, remaining: -80 });
   });
 

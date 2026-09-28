@@ -98,7 +98,7 @@ const assetCreateSchema = z.object({
 const assetPatchSchema = assetCreateSchema.partial();
 
 router.get('/dashboard', handler(async (req, res) => {
-  ok(res, wealth.getDashboard({ month: req.query.month, range: req.query.range }));
+  ok(res, wealth.getDashboard({ range: req.query.range }));
 }));
 
 router.get('/assets', handler(async (req, res) => {
