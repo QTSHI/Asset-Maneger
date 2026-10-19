@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily verified Stone Wealth backup
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 Asia/Shanghai
+RandomizedDelaySec=15m
+Persistent=true
+Unit=stone-wealth-backup.service
+
+[Install]
+WantedBy=timers.target

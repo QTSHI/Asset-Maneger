@@ -763,6 +763,7 @@ module.exports = {
   CLASS_META,
   SUBTYPE_LABELS,
   money,
+  getActiveAssets,
   valueAssets,
   getDashboard,
   getHouseholdSummary,

@@ -254,7 +254,7 @@ describe('Stone Wealth data model', () => {
 
     const deleted = await fetch(`${apiBaseUrl}/household/transactions/${id}`, {
       method: 'DELETE',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', Origin: new URL(apiBaseUrl).origin },
     });
     expect(deleted.status).toBe(204);
 
@@ -267,33 +267,37 @@ describe('Stone Wealth data model', () => {
   it('edits and archives an existing account without changing its identity', async () => {
     const cny = db.prepare("SELECT id FROM currencies WHERE code='CNY'").get().id;
     const created = await fetch(`${apiBaseUrl}/accounts`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(apiBaseUrl).origin },
       body: JSON.stringify({ name: 'Maintenance account', account_type: 'bank', default_currency_id: cny }),
     });
     expect(created.status).toBe(201);
     const account = (await created.json()).data;
     const updated = await fetch(`${apiBaseUrl}/accounts/${account.id}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: new URL(apiBaseUrl).origin },
       body: JSON.stringify({ name: 'Maintenance account · savings', account_type: 'cash' }),
     });
     expect(updated.status).toBe(200);
     expect((await updated.json()).data).toMatchObject({ id: account.id, name: 'Maintenance account · savings', account_type: 'cash' });
 
     const duplicate = await fetch(`${apiBaseUrl}/accounts`, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      method: 'POST', headers: { 'Content-Type': 'application/json', Origin: new URL(apiBaseUrl).origin },
       body: JSON.stringify({ name: 'Maintenance account · savings', account_type: 'cash', default_currency_id: cny }),
     });
     expect(duplicate.status).toBe(409);
     expect((await duplicate.json()).error.code).toBe('ACCOUNT_NAME_EXISTS');
 
-    const archived = await fetch(`${apiBaseUrl}/accounts/${account.id}`, { method: 'DELETE' });
+    const archived = await fetch(`${apiBaseUrl}/accounts/${account.id}`, {
+      method: 'DELETE', headers: { Origin: new URL(apiBaseUrl).origin },
+    });
     expect(archived.status).toBe(204);
     expect(db.prepare('SELECT archived_at FROM platforms WHERE id = ?').get(account.id).archived_at).toBeTruthy();
     expect(db.prepare('SELECT COUNT(*) count FROM platforms WHERE id = ?').get(account.id).count).toBe(1);
 
     const archivedList = await fetch(`${apiBaseUrl}/accounts?archived=1`);
     expect((await archivedList.json()).data.some((row: any) => row.id === account.id)).toBe(true);
-    const restored = await fetch(`${apiBaseUrl}/accounts/${account.id}/restore`, { method: 'POST' });
+    const restored = await fetch(`${apiBaseUrl}/accounts/${account.id}/restore`, {
+      method: 'POST', headers: { Origin: new URL(apiBaseUrl).origin },
+    });
     expect(restored.status).toBe(200);
     expect((await restored.json()).data).toMatchObject({ id: account.id, archived_at: null });
   });
@@ -313,26 +317,28 @@ describe('Stone Wealth data model', () => {
     `).run(fundType, accountId, cny).lastInsertRowid);
     const beforeCount = db.prepare('SELECT COUNT(*) count FROM assets WHERE platform_id = ?').get(accountId).count;
 
-    const archiveWithAssets = await fetch(`${apiBaseUrl}/accounts/${accountId}`, { method: 'DELETE' });
+    const archiveWithAssets = await fetch(`${apiBaseUrl}/accounts/${accountId}`, {
+      method: 'DELETE', headers: { Origin: new URL(apiBaseUrl).origin },
+    });
     expect(archiveWithAssets.status).toBe(409);
     expect(db.prepare('SELECT archived_at FROM platforms WHERE id = ?').get(accountId).archived_at).toBeNull();
 
     const rejected = await fetch(`${apiBaseUrl}/assets/${fundId}/cash-balance`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: new URL(apiBaseUrl).origin },
       body: JSON.stringify({ balance: 900, confirmed_on: '2026-09-01' }),
     });
     expect(rejected.status).toBe(400);
 
     db.prepare("UPDATE assets SET external_source = 'trading212' WHERE id = ?").run(cashId);
     const syncManaged = await fetch(`${apiBaseUrl}/assets/${cashId}/cash-balance`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: new URL(apiBaseUrl).origin },
       body: JSON.stringify({ balance: 900, confirmed_on: '2026-09-01' }),
     });
     expect(syncManaged.status).toBe(409);
     db.prepare('UPDATE assets SET external_source = NULL WHERE id = ?').run(cashId);
 
     const confirmed = await fetch(`${apiBaseUrl}/assets/${cashId}/cash-balance`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: new URL(apiBaseUrl).origin },
       body: JSON.stringify({ balance: 120.35, confirmed_on: '2026-09-01' }),
     });
     expect(confirmed.status).toBe(200);
@@ -347,14 +353,14 @@ describe('Stone Wealth data model', () => {
 
     // A negative cash balance represents an overdraft and reduces total wealth.
     const overdraft = await fetch(`${apiBaseUrl}/assets/${cashId}/cash-balance`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: new URL(apiBaseUrl).origin },
       body: JSON.stringify({ balance: -25.5, confirmed_on: '2026-09-02' }),
     });
     expect(overdraft.status).toBe(200);
     expect(wealth.valueAssets().find((row: any) => row.id === cashId).marketValueCny).toBe(-25.5);
 
     const editedElsewhere = await fetch(`${apiBaseUrl}/assets/${cashId}`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      method: 'PATCH', headers: { 'Content-Type': 'application/json', Origin: new URL(apiBaseUrl).origin },
       body: JSON.stringify({ cost_price: 0.99 }),
     });
     expect(editedElsewhere.status).toBe(200);

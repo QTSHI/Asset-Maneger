@@ -84,6 +84,12 @@ function isApiRequest(req) {
 }
 
 const app = express();
+// SSO callbacks may contain a credential in the URL. Do not forward it in
+// requests for assets or external links, including unauthenticated redirects.
+app.use((_req, res, next) => {
+    res.set('Referrer-Policy', 'no-referrer');
+    next();
+});
 app.use(compression());
 app.use(express.json());
 // Agent keys have a separate entry point and are never treated as website SSO credentials.
@@ -167,9 +173,15 @@ app.get('/', (req, res) => {
         token: req.token
     };
     
-    const injectScript = `<script>window.__USER__=${JSON.stringify(userInfo)};</script>`;
+    // HTML script parsing happens before JavaScript parsing, so JSON alone
+    // cannot safely embed a username containing a closing script tag.
+    const serializedUser = JSON.stringify(userInfo).replace(/[<\u2028\u2029]/g, (character) => ({
+        '<': '\\u003c', '\u2028': '\\u2028', '\u2029': '\\u2029'
+    })[character]);
+    const injectScript = `<script>window.__USER__=${serializedUser};</script>`;
     html = html.replace('</head>', injectScript + '</head>');
-    
+
+    res.set('Cache-Control', 'no-store');
     res.send(html);
 });
 
