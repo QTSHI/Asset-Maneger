@@ -38,7 +38,7 @@ afterAll(async () => {
 async function request(route: string, method: string, body: unknown) {
   const response = await fetch(`${baseUrl}${route}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Origin: new URL(baseUrl).origin },
     body: JSON.stringify(body),
   });
   return { status: response.status, payload: await response.json() };
@@ -116,7 +116,9 @@ describe('household transaction and asset cash-flow consistency', () => {
     const linked = await request(`/household/transactions/${id}/link-cash-flow`, 'POST', {});
     const flowId = linked.payload.data.cashFlowId;
 
-    const unlinked = await fetch(`${baseUrl}/household/transactions/${id}/cash-flow-link`, { method: 'DELETE' });
+    const unlinked = await fetch(`${baseUrl}/household/transactions/${id}/cash-flow-link`, {
+      method: 'DELETE', headers: { Origin: new URL(baseUrl).origin },
+    });
     expect(unlinked.status).toBe(204);
     expect(db.prepare('SELECT linked_cash_flow_id FROM household_transactions WHERE id = ?').get(id).linked_cash_flow_id).toBeNull();
     expect(db.prepare('SELECT amount, source_transaction_id, archived_at FROM cash_flows WHERE id = ?').get(flowId))

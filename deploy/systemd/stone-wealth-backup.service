@@ -1,0 +1,23 @@
+[Unit]
+Description=Create and verify a Stone Wealth SQLite backup
+# Optional: attach your own alert unit after configuring a notification channel.
+# OnFailure=stone-wealth-backup-alert@%n.service
+
+[Service]
+Type=oneshot
+User=stone-wealth
+Group=stone-wealth
+WorkingDirectory=/opt/asset-tracker
+EnvironmentFile=/etc/stone-wealth/backup.env
+ExecStart=/usr/bin/node /opt/asset-tracker/scripts/backup-maintenance.cjs
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+# Keep these paths in sync with backup.env. The source directory allows SQLite
+# to access the live WAL shared-memory files under the website service account.
+ReadWritePaths=/var/lib/stone-wealth/data /var/backups/stone-wealth
+TimeoutStartSec=1h
+StandardOutput=journal
+StandardError=journal

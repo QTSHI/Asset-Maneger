@@ -12,7 +12,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "backup": "node scripts/backup-database.cjs",
+    "backup": "node scripts/backup-maintenance.cjs",
+    "backup:check": "node scripts/check-backup.cjs",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck && npm run test && npm run build"
   },

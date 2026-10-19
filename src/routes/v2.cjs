@@ -7,6 +7,13 @@ const agent = require('../services/agentService.cjs');
 
 const router = express.Router();
 
+// The website uses cookie-based SSO as well as its legacy token transport.
+// Protect every business mutation, including future routes, from cross-site use.
+router.use((req, res, next) => {
+  if (['GET', 'HEAD', 'OPTIONS'].includes(req.method)) return next();
+  return requireSameOrigin(req, res, next);
+});
+
 function ok(res, data, meta) {
   return res.json(meta ? { data, meta } : { data });
 }
@@ -140,6 +147,9 @@ function requireSameOrigin(req, res, next) {
 }
 
 router.use('/agent', requireWebsiteUser);
+router.use('/attention', require('./attention.cjs'));
+router.use('/exports', require('./exports.cjs'));
+router.use('/backup', require('./backupStatus.cjs'));
 
 router.get('/agent/proposals', handler(async (req, res) => {
   res.set('Cache-Control', 'no-store');
@@ -192,6 +202,61 @@ router.get('/assets', handler(async (req, res) => {
   const sort = req.query.sort || 'value';
   assets.sort((a, b) => sort === 'name' ? a.name.localeCompare(b.name, 'zh-CN') : b.marketValueCny - a.marketValueCny);
   sendList(res, assets, req.query);
+}));
+
+function assetRestoreBlockedReason(asset) {
+  if ((asset.external_source && asset.external_source !== 'manual_import') || asset.code === 'T212-TOTAL') {
+    return '该资产由外部同步管理，请重新同步账户，避免重复计入持仓';
+  }
+  const account = getRecord('platforms', asset.platform_id);
+  if (!account || account.archived_at) return '请先恢复该资产所属的账户';
+  if (!getRecord('asset_types', asset.asset_type_id) || !getRecord('currencies', asset.currency_id)) {
+    return '该资产的类别或币种已不存在，请先核对基础数据';
+  }
+  return null;
+}
+
+router.get('/assets/archived', handler(async (req, res) => {
+  const assets = db.prepare(`
+    SELECT a.*, p.name AS account_name, p.archived_at AS account_archived_at,
+           at.name AS asset_type_name, c.code AS currency_code
+    FROM assets a
+    LEFT JOIN platforms p ON p.id = a.platform_id
+    LEFT JOIN asset_types at ON at.id = a.asset_type_id
+    LEFT JOIN currencies c ON c.id = a.currency_id
+    WHERE a.archived_at IS NOT NULL
+    ORDER BY a.archived_at DESC, a.id DESC
+  `).all().map((asset) => {
+    const reason = assetRestoreBlockedReason(asset);
+    return { ...asset, can_restore: !reason, restore_blocked_reason: reason };
+  });
+  sendList(res, assets, req.query);
+}));
+
+router.post('/assets/:id/restore', handler(async (req, res) => {
+  const id = parse(idSchema, req.params.id);
+  let after;
+  db.transaction(() => {
+    const before = getRecord('assets', id);
+    if (!before || !before.archived_at) {
+      const error = new Error('已归档资产不存在');
+      error.status = 404;
+      error.code = 'NOT_FOUND';
+      throw error;
+    }
+    const reason = assetRestoreBlockedReason(before);
+    if (reason) {
+      const error = new Error(reason);
+      error.status = 409;
+      error.code = 'RESTORE_BLOCKED';
+      throw error;
+    }
+    const user = username(req);
+    db.prepare('UPDATE assets SET archived_at = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, id);
+    after = getRecord('assets', id);
+    audit('asset', id, 'restore', user, before, after);
+  })();
+  ok(res, after);
 }));
 
 router.post('/assets', handler(async (req, res) => {
@@ -543,8 +608,8 @@ function validTransactionCategory(categoryId, kind) {
   return category?.kind === kind;
 }
 
-function transactionList(query = {}) {
-  const conditions = ['ht.archived_at IS NULL'];
+function transactionList(query = {}, archived = false) {
+  const conditions = [`ht.archived_at IS ${archived ? 'NOT NULL' : 'NULL'}`];
   const params = [];
   if (query.month) { conditions.push("substr(ht.occurred_on, 1, 7) = ?"); params.push(query.month); }
   if (query.kind) { conditions.push('ht.kind = ?'); params.push(query.kind); }
@@ -556,8 +621,8 @@ function transactionList(query = {}) {
     SELECT ht.*, c.code AS currency_code, hc.name AS category_name, hc.color AS category_color,
            p.name AS account_name, hp.name AS project_name
     FROM household_transactions ht
-    JOIN currencies c ON c.id = ht.currency_id
-    JOIN household_categories hc ON hc.id = ht.category_id
+    LEFT JOIN currencies c ON c.id = ht.currency_id
+    LEFT JOIN household_categories hc ON hc.id = ht.category_id
     LEFT JOIN platforms p ON p.id = ht.account_id
     LEFT JOIN household_projects hp ON hp.id = ht.project_id
     WHERE ${conditions.join(' AND ')}
@@ -566,6 +631,108 @@ function transactionList(query = {}) {
 }
 
 router.get('/household/transactions', handler(async (req, res) => sendList(res, transactionList(req.query), req.query)));
+
+function transactionRestoreBlockedReason(transaction) {
+  const category = getRecord('household_categories', transaction.category_id);
+  if (!category || category.archived_at || category.kind !== transaction.kind) {
+    return '该记录的收支分类已停用或发生变化，请先核对分类';
+  }
+  if (!getRecord('currencies', transaction.currency_id)) return '该记录的币种已不存在，请先核对基础数据';
+  if (transaction.account_id) {
+    const account = getRecord('platforms', transaction.account_id);
+    if (!account || account.archived_at) return '请先恢复该记录所属的账户';
+  }
+  return null;
+}
+
+function ownsLinkedFlow(transaction, flow) {
+  return flow?.source_transaction_id === transaction.id && !db.prepare(`
+    SELECT id FROM household_transactions WHERE linked_cash_flow_id = ? AND id != ? LIMIT 1
+  `).get(flow.id, transaction.id);
+}
+
+function flowRestoreBlockedReason(transaction) {
+  if (!transaction.linked_cash_flow_id) return null;
+  const flow = getRecord('cash_flows', transaction.linked_cash_flow_id);
+  if (!flow || !ownsLinkedFlow(transaction, flow)) return '原关联资金流已不存在或关联发生变化，可仅恢复收支并重新核对';
+  if (!flow.archived_at) return '原关联资金流当前仍有效，可仅恢复收支，原资金流会保留';
+  if (flow.account_id) {
+    const account = getRecord('platforms', flow.account_id);
+    if (!account || account.archived_at) return '请先恢复原资金流所属的账户，或仅恢复收支';
+  }
+  // Only a flow archived atomically by this transaction's delete operation may
+  // be revived. Older records and independently edited/archived flows stay put.
+  const archive = db.prepare(`
+    SELECT action, before_json, after_json FROM audit_log
+    WHERE entity_type = 'cash_flow' AND entity_id = ? ORDER BY id DESC LIMIT 1
+  `).get(flow.id);
+  try {
+    const before = JSON.parse(archive?.before_json || 'null');
+    const after = JSON.parse(archive?.after_json || 'null');
+    if (archive?.action === 'archive_with_transaction' && before?.archived_at === null &&
+        before.source_transaction_id === transaction.id && flow.archived_at === transaction.archived_at &&
+        JSON.stringify(after) === JSON.stringify(flow)) return null;
+  } catch (_) {
+    // An incomplete audit history is insufficient proof for reviving money flows.
+  }
+  return '无法确认原资金流由本次删除归档，可仅恢复收支，原资金流会保留';
+}
+
+router.get('/household/transactions/archived', handler(async (req, res) => {
+  const transactions = transactionList(req.query, true).map((transaction) => {
+    const reason = transactionRestoreBlockedReason(transaction);
+    return {
+      ...transaction,
+      can_restore: !reason,
+      restore_blocked_reason: reason,
+      flow_restore_blocked_reason: flowRestoreBlockedReason(transaction)
+    };
+  });
+  sendList(res, transactions, req.query);
+}));
+
+router.post('/household/transactions/:id/restore', handler(async (req, res) => {
+  const id = parse(idSchema, req.params.id);
+  const input = parse(z.object({ linked_action: z.enum(['sync', 'unlink']).optional() }).strict(), req.body || {});
+  let after;
+  db.transaction(() => {
+    const before = getRecord('household_transactions', id);
+    const reason = !before || !before.archived_at ? '已归档收支记录不存在' : transactionRestoreBlockedReason(before);
+    if (reason) {
+      const error = new Error(reason);
+      error.status = !before || !before.archived_at ? 404 : 409;
+      error.code = error.status === 404 ? 'NOT_FOUND' : 'RESTORE_BLOCKED';
+      throw error;
+    }
+    const user = username(req);
+    if (before.linked_cash_flow_id) {
+      const flow = getRecord('cash_flows', before.linked_cash_flow_id);
+      if (input.linked_action === 'unlink') {
+        // Record-only recovery never changes whether a money flow is counted.
+        // Do not touch a flow that no longer belongs to this transaction.
+        if (ownsLinkedFlow(before, flow)) {
+          db.prepare('UPDATE cash_flows SET source_transaction_id = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, flow.id);
+          audit('cash_flow', flow.id, 'unlink_transaction', user, flow, getRecord('cash_flows', flow.id));
+        }
+        db.prepare('UPDATE household_transactions SET linked_cash_flow_id = NULL WHERE id = ?').run(id);
+      } else {
+        const flowReason = flowRestoreBlockedReason(before);
+        if (flowReason) {
+          const error = new Error(flowReason);
+          error.status = 409;
+          error.code = 'LINKED_FLOW_RESTORE_BLOCKED';
+          throw error;
+        }
+        db.prepare('UPDATE cash_flows SET archived_at = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, flow.id);
+        audit('cash_flow', flow.id, 'restore_with_transaction', user, flow, getRecord('cash_flows', flow.id));
+      }
+    }
+    db.prepare('UPDATE household_transactions SET archived_at = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, id);
+    after = getRecord('household_transactions', id);
+    audit('household_transaction', id, input.linked_action === 'unlink' ? 'restore_without_cash_flow' : 'restore', user, before, after);
+  })();
+  ok(res, after);
+}));
 
 router.post('/household/transactions', handler(async (req, res) => {
   const input = parse(transactionSchema, req.body);
@@ -638,17 +805,26 @@ router.delete('/household/transactions/:id', handler(async (req, res) => {
   if (before.linked_cash_flow_id && !['sync', 'unlink'].includes(linkedAction)) {
     return fail(res, 409, 'LINK_ACTION_REQUIRED', '请先选择同步归档关联资金流或解除关联');
   }
+  const flow = before.linked_cash_flow_id ? getRecord('cash_flows', before.linked_cash_flow_id) : null;
+  if (before.linked_cash_flow_id && linkedAction === 'sync' && (!ownsLinkedFlow(before, flow) || flow.archived_at)) {
+    return fail(res, 409, 'LINKED_FLOW_CHANGED', '关联资金流已发生变化，请核对后选择解除关联');
+  }
   const user = username(req);
   db.transaction(() => {
-    db.prepare('UPDATE household_transactions SET archived_at = CURRENT_TIMESTAMP, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, id);
+    const archivedAt = new Date().toISOString();
+    db.prepare('UPDATE household_transactions SET archived_at = ?, updated_by = ?, updated_at = ? WHERE id = ?').run(archivedAt, user, archivedAt, id);
     if (before.linked_cash_flow_id && linkedAction === 'sync') {
-      db.prepare('UPDATE cash_flows SET archived_at = CURRENT_TIMESTAMP, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, before.linked_cash_flow_id);
+      db.prepare('UPDATE cash_flows SET archived_at = ?, updated_by = ?, updated_at = ? WHERE id = ?').run(archivedAt, user, archivedAt, flow.id);
+      audit('cash_flow', flow.id, 'archive_with_transaction', user, flow, getRecord('cash_flows', flow.id));
     } else if (before.linked_cash_flow_id && linkedAction === 'unlink') {
-      db.prepare('UPDATE cash_flows SET source_transaction_id = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, before.linked_cash_flow_id);
+      if (ownsLinkedFlow(before, flow)) {
+        db.prepare('UPDATE cash_flows SET source_transaction_id = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, flow.id);
+        audit('cash_flow', flow.id, 'unlink_transaction', user, flow, getRecord('cash_flows', flow.id));
+      }
       db.prepare('UPDATE household_transactions SET linked_cash_flow_id = NULL WHERE id = ?').run(id);
     }
+    audit('household_transaction', id, 'archive', user, before, getRecord('household_transactions', id));
   })();
-  audit('household_transaction', id, 'archive', user, before, getRecord('household_transactions', id));
   res.status(204).end();
 }));
 
@@ -678,7 +854,7 @@ router.post('/household/transactions/:id/link-cash-flow', handler(async (req, re
 router.delete('/household/transactions/:id/cash-flow-link', handler(async (req, res) => {
   const id = parse(idSchema, req.params.id);
   const transaction = getRecord('household_transactions', id);
-  if (!transaction || !transaction.linked_cash_flow_id) return fail(res, 404, 'NOT_LINKED', '该记录没有关联资金流');
+  if (!transaction || transaction.archived_at || !transaction.linked_cash_flow_id) return fail(res, 404, 'NOT_LINKED', '该记录没有关联资金流');
   const user = username(req);
   db.transaction(() => {
     db.prepare('UPDATE cash_flows SET source_transaction_id = NULL, updated_by = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?').run(user, transaction.linked_cash_flow_id);

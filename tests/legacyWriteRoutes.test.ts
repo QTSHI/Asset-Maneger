@@ -28,7 +28,7 @@ async function availablePort() {
 async function request(route: string, method = 'GET', body?: unknown) {
   const response = await fetch(`${baseUrl}${route}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', Origin: new URL(baseUrl).origin },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   return { status: response.status, payload: response.status === 204 ? null : await response.json() };

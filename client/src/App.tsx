@@ -25,6 +25,7 @@ import {
   WalletCards,
 } from "lucide-react";
 import { api } from "./api";
+import { AttentionPanel } from "./attentionPanel";
 import type { DashboardData } from "./types";
 
 const loadPages = () => import("./pages");
@@ -173,7 +174,7 @@ function App() {
               path="/accounts"
               element={<AccountsPage privateMode={privateMode} />}
             />
-            <Route path="/status" element={<StatusPage />} />
+            <Route path="/status" element={<StatusPage privateMode={privateMode} />} />
             <Route path="/agent" element={<AgentPage privateMode={privateMode} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
@@ -210,10 +211,13 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
   if (query.isLoading) return <DashboardSkeleton />;
   if (query.isError || !data)
     return (
+      <div className="page-stack">
+      <AttentionPanel privateMode={privateMode} />
       <div className="state-card">
         <strong>暂时无法加载数据</strong>
         <span>{query.error?.message}</span>
         <button onClick={() => query.refetch()}>重新加载</button>
+      </div>
       </div>
     );
 
@@ -313,6 +317,7 @@ function Dashboard({ privateMode }: { privateMode: boolean }) {
         </div>
       </section>
 
+      <div className="dashboard-attention"><AttentionPanel privateMode={privateMode} /></div>
       <section className="asset-class-grid">
         {classCards.map((item, index) => (
           <article

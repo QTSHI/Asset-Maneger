@@ -1,6 +1,6 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { NavLink } from "react-router-dom";
+import { NavLink, useSearchParams } from "react-router-dom";
 import {
   AlertCircle,
   ArrowDownLeft,
@@ -23,7 +23,11 @@ import {
 } from "lucide-react";
 import { api } from "./api";
 import { parseAccountHierarchy, platformName } from "./accountHierarchy";
-import { consolidateInstruments } from "./instrumentConsolidation";
+import { consolidateInstruments, instrumentIdentity } from "./instrumentConsolidation";
+import { RecycleBin } from "./recycleBin";
+import { AttentionPanel } from "./attentionPanel";
+import { ExportButton } from "./exportButton";
+import { BackupStatusCard } from "./backupStatusCard";
 import {
   currentMonth,
   MonthNavigator,
@@ -226,6 +230,8 @@ function cashConfirmation(asset: ValuedAsset) {
 
 export function AssetsPage({ privateMode }: { privateMode: boolean }) {
   const client = useQueryClient();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedAsset = searchParams.get("asset");
   const assets = useQuery({
     queryKey: ["assets"],
     queryFn: () => api.get<ValuedAsset[]>("/assets"),
@@ -237,6 +243,29 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
   const [editingCash, setEditingCash] = useState<ValuedAsset | null>(null);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
   const [selectedInstrument, setSelectedInstrument] = useState<string | null>(null);
+  const handledAssetLink = useRef<string | null>(null);
+  const focusedAsset = requestedAsset ? assets.data?.find((asset) => String(asset.id) === requestedAsset) : undefined;
+
+  useEffect(() => {
+    if (!requestedAsset) { handledAssetLink.current = null; return; }
+    if (!assets.isSuccess || handledAssetLink.current === requestedAsset) return;
+    handledAssetLink.current = requestedAsset;
+    if (focusedAsset) {
+      setQuery("");
+      setView("class");
+      setSelectedGroup(focusedAsset.classCode);
+      setSelectedInstrument(focusedAsset.classCode === "fund" ? instrumentIdentity(focusedAsset) : null);
+    }
+  }, [requestedAsset, assets.isSuccess, focusedAsset]);
+
+  useEffect(() => {
+    if (!focusedAsset || !selectedGroup) return;
+    const frame = requestAnimationFrame(() => {
+      const row = document.getElementById(`asset-record-${focusedAsset.id}`);
+      row?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [focusedAsset, selectedGroup, selectedInstrument]);
 
   const filtered = (assets.data || []).filter((asset) =>
     `${asset.name} ${asset.code} ${asset.accountName}`
@@ -306,6 +335,8 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
     onSuccess: () => {
       client.invalidateQueries({ queryKey: ["assets"] });
       client.invalidateQueries({ queryKey: ["dashboard"] });
+      client.invalidateQueries({ queryKey: ["accounts"] });
+      client.invalidateQueries({ queryKey: ["recycle-bin", "assets"] });
     },
   });
   const total = filtered.reduce((sum, asset) => sum + asset.marketValueCny, 0);
@@ -324,6 +355,16 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
               <Plus size={16} /> 添加资产
             </button>)}
       />
+      <div className="page-tools"><ExportButton kind="assets" privateMode={privateMode} /></div>
+      <RecycleBin kind="assets" privateMode={privateMode} />
+      {requestedAsset && assets.isSuccess && <div className="asset-focus-note" role="status">
+        <span>{focusedAsset ? `已定位资产：${focusedAsset.name}` : "该资产已归档或不存在，可查看回收站。"}</span>
+        <button type="button" className="link-button" onClick={() => {
+          const next = new URLSearchParams(searchParams);
+          next.delete("asset");
+          setSearchParams(next);
+        }}>取消定位</button>
+      </div>}
       {meta.error && (
         <p className="form-error" role="alert">
           无法加载账户和资产类型：{meta.error.message}{" "}
@@ -533,7 +574,7 @@ export function AssetsPage({ privateMode }: { privateMode: boolean }) {
               </thead>
               <tbody>
                 {(selected.key === "fund" ? selectedFund?.assets || [] : selected.assets).map((asset) => (
-                  <tr key={asset.id}>
+                  <tr key={asset.id} id={`asset-record-${asset.id}`} className={focusedAsset?.id === asset.id ? "focused-asset-row" : undefined}>
                     <td data-label="资产">
                       <strong>{asset.name}</strong>
                       <small>{asset.code} · {asset.currency}</small>
@@ -862,6 +903,7 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
       await Promise.all([
         client.invalidateQueries({ queryKey: ["transactions"] }),
         client.invalidateQueries({ queryKey: ["dashboard"] }),
+        client.invalidateQueries({ queryKey: ["recycle-bin", "transactions"] }),
       ]);
       setDeleting(null);
     },
@@ -888,6 +930,11 @@ export function TransactionsPage({ privateMode }: { privateMode: boolean }) {
           </button>
         }
       />
+      <div className="page-tools">
+        <ExportButton kind="transactions" month={month} privateMode={privateMode} />
+        <ExportButton kind="transactions" privateMode={privateMode} />
+      </div>
+      <RecycleBin kind="transactions" privateMode={privateMode} />
       {query.isSuccess && <div className="summary-strip">
         <div>
           <span>该月收入</span>
@@ -1366,19 +1413,19 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
   const [editingAccount, setEditingAccount] = useState<AccountRecord | "new" | null>(null);
   const [editingCash, setEditingCash] = useState<ValuedAsset | null>(null);
   const [selectedPlatform, setSelectedPlatform] = useState<string | null>(null);
+  const refreshAccountData = () => Promise.all([
+    client.invalidateQueries({ queryKey: ["accounts"] }),
+    client.invalidateQueries({ queryKey: ["meta"] }),
+    client.invalidateQueries({ queryKey: ["assets"] }),
+    client.invalidateQueries({ queryKey: ["dashboard"] }),
+  ]);
   const archiveAccount = useMutation({
     mutationFn: (id: number) => api.delete(`/accounts/${id}`),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["accounts"] });
-      client.invalidateQueries({ queryKey: ["meta"] });
-    },
+    onSuccess: refreshAccountData,
   });
   const restoreAccount = useMutation({
     mutationFn: (id: number) => api.post(`/accounts/${id}/restore`, {}),
-    onSuccess: () => {
-      client.invalidateQueries({ queryKey: ["accounts"] });
-      client.invalidateQueries({ queryKey: ["meta"] });
-    },
+    onSuccess: refreshAccountData,
   });
   const accountLabels: Record<string, string> = {
     investment: "投资账户",
@@ -1399,7 +1446,7 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
       group.accounts.push(account);
       map.set(name, group);
     }
-    for (const asset of assets.data || []) {
+    for (const asset of assets.isSuccess ? assets.data : []) {
       const name = platformName(asset.accountName);
       const group = map.get(name) || { name, accounts: [], assets: [], value: 0 };
       group.assets.push(asset);
@@ -1407,7 +1454,7 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
       map.set(name, group);
     }
     return [...map.values()].sort((a, b) => b.value - a.value);
-  }, [query.data, assets.data]);
+  }, [query.data, assets.data, assets.isSuccess]);
   const selected = platformGroups.find((group) => group.name === selectedPlatform);
   return (
     <div className="page-stack">
@@ -1420,13 +1467,14 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
             <button className="secondary-button" onClick={() => setShowArchived(!showArchived)}>
               {showArchived ? "隐藏已归档" : "查看已归档"}
             </button>
-            <button className="primary-button" onClick={() => setEditingAccount("new")}>
+            <button className="primary-button" onClick={() => setEditingAccount("new")} disabled={!meta.data}>
               <Plus size={16} /> 添加账户
             </button>
           </div>
         }
       />
-      {(query.data?.length || 0) > 0 && assets.data?.length === 0 && (
+      <div className="page-tools"><ExportButton kind="accounts" privateMode={privateMode} /></div>
+      {query.isSuccess && query.data.length > 0 && assets.isSuccess && assets.data.length === 0 && (
         <section className="first-use-next" aria-label="下一步：录入资产">
           <div>
             <strong>账户已建好，下一步录入第一项资产</strong>
@@ -1442,9 +1490,33 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
         <ChevronRight size={16} />
         <div><b>3</b><span>持仓</span><strong>具体资产项目</strong></div>
       </div>
-      {(query.error || assets.error) && (
-        <p className="form-error" role="alert">{(query.error || assets.error)?.message}</p>
+      {meta.isPending && (
+        <div className="state-card" role="status">正在加载账户设置，完成后可添加或修改账户…</div>
       )}
+      {meta.isError && (
+        <div className="state-card" role="alert">
+          <strong>暂时无法读取账户设置</strong>
+          <span>{meta.error.message}</span>
+          <button type="button" onClick={() => meta.refetch()}>重试读取账户设置</button>
+        </div>
+      )}
+      {query.isPending && <div className="state-card" role="status">正在加载账户…</div>}
+      {query.isError && (
+        <div className="state-card" role="alert">
+          <strong>暂时无法读取账户</strong>
+          <span>{query.error.message}</span>
+          <button type="button" onClick={() => query.refetch()}>重试读取账户</button>
+        </div>
+      )}
+      {assets.isPending && <div className="state-card" role="status">正在加载账户持仓与市值…</div>}
+      {assets.isError && (
+        <div className="state-card" role="alert">
+          <strong>暂时无法读取账户持仓与市值</strong>
+          <span>{assets.error.message}</span>
+          <button type="button" onClick={() => assets.refetch()}>重试读取账户持仓</button>
+        </div>
+      )}
+      {query.isSuccess && <>
       <div className="account-card-grid">
         {platformGroups.map((platform) => (
           <button
@@ -1461,10 +1533,10 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
               </span>
               <h3>{platform.name}</h3>
               <p>
-                {platform.accounts.length} 个子账户 / 渠道 · {platform.assets.length} 项持仓
+                {platform.accounts.length} 个子账户 / 渠道 · {assets.isSuccess ? `${platform.assets.length} 项持仓` : assets.isPending ? "持仓加载中" : "持仓暂不可用"}
               </p>
             </div>
-            <strong>{money(platform.value, privateMode)}</strong>
+            <strong>{assets.isSuccess ? money(platform.value, privateMode) : assets.isPending ? "市值加载中" : "市值暂不可用"}</strong>
             <ChevronRight size={17} />
           </button>
         ))}
@@ -1476,7 +1548,7 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
               <span>平台</span>
               <h3>{selected.name}</h3>
               <p>
-                子账户 / 渠道：{selected.accounts.map((account) => parseAccountHierarchy(account.name).channelName).join("、")} · {money(selected.value, privateMode)}
+                子账户 / 渠道：{selected.accounts.map((account) => parseAccountHierarchy(account.name).channelName).join("、")} · {assets.isSuccess ? money(selected.value, privateMode) : assets.isPending ? "市值加载中" : "市值暂不可用"}
               </p>
             </div>
             <button className="secondary-button" onClick={() => setSelectedPlatform(null)}>收起明细</button>
@@ -1498,7 +1570,7 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
                     <td data-label="持仓数">{account.asset_count}</td>
                     <td data-label="操作">
                       <div className="row-actions">
-                        <button onClick={() => setEditingAccount(account)} aria-label={`修改 ${account.name}`} title="修改账户"><Edit3 size={15} /></button>
+                        <button onClick={() => setEditingAccount(account)} disabled={!meta.data} aria-label={`修改 ${account.name}`} title="修改账户"><Edit3 size={15} /></button>
                         <button
                           onClick={() => confirm(`归档 ${account.name}？历史记录会保留。`) && archiveAccount.mutate(account.id)}
                           aria-label={`归档 ${account.name}`}
@@ -1513,7 +1585,7 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
               </tbody>
             </table>
           </div>
-          {selected.assets.length ? (
+          {assets.isSuccess && (selected.assets.length ? (
             <div className="responsive-table">
               <table>
                 <thead>
@@ -1567,24 +1639,33 @@ export function AccountsPage({ privateMode }: { privateMode: boolean }) {
               title="这个平台暂无资产持仓"
               text="它仍可作为家庭收支账户使用。"
             />
-          )}
+          ))}
         </section>
       )}
-      {!platformGroups.length && !query.isPending && !assets.isPending && !query.error && !assets.error && (
+      {!platformGroups.length && assets.isSuccess && (
         <EmptyState
           icon={<CircleDollarSign />}
           title="还没有账户"
           text="先添加一个银行、投资、钱包或现金账户，再录入第一项资产。"
-          action={<button className="primary-button" onClick={() => setEditingAccount("new")}>添加第一个账户</button>}
+          action={<button className="primary-button" onClick={() => setEditingAccount("new")} disabled={!meta.data}>添加第一个账户</button>}
         />
       )}
+      </>}
       {showArchived && (
         <section className="content-panel no-padding">
           <div className="detail-head"><div><span>历史账户</span><h3>已归档账户</h3></div></div>
-          {(archivedAccounts.error || restoreAccount.error) && (
-            <p className="form-error" role="alert">{(archivedAccounts.error || restoreAccount.error)?.message}</p>
+          {archivedAccounts.isPending && <div className="state-card" role="status">正在加载已归档账户…</div>}
+          {archivedAccounts.isError && (
+            <div className="state-card" role="alert">
+              <strong>暂时无法读取已归档账户</strong>
+              <span>{archivedAccounts.error.message}</span>
+              <button type="button" onClick={() => archivedAccounts.refetch()}>重试读取已归档账户</button>
+            </div>
           )}
-          {archivedAccounts.data?.length ? (
+          {restoreAccount.error && (
+            <p className="form-error" role="alert">{restoreAccount.error.message}</p>
+          )}
+          {archivedAccounts.isSuccess && archivedAccounts.data.length ? (
             <div className="responsive-table">
               <table>
                 <thead><tr><th>账户</th><th>类型</th><th>归档时间</th><th>操作</th></tr></thead>
@@ -1725,7 +1806,7 @@ function AccountForm({
   );
 }
 
-export function StatusPage() {
+export function StatusPage({ privateMode = false }: { privateMode?: boolean }) {
   const client = useQueryClient();
   const database = useQuery({
     queryKey: ["data-health"],
@@ -1793,6 +1874,8 @@ export function StatusPage() {
           </button>
         }
       />
+      <BackupStatusCard />
+      <AttentionPanel privateMode={privateMode} />
       {refresh.isError && <p className="form-error" role="alert">行情刷新失败：{refresh.error.message}</p>}
       <div className="status-grid">
         <article className="status-card">
