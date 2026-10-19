@@ -122,13 +122,23 @@ function parsePositions(value) {
 function accountSummaryValues(summary) {
   const cash = pickNumber(summary?.cash?.free, summary?.cash?.availableToTrade, summary?.cash?.available, summary?.free, summary?.cashBalance);
   const total = pickNumber(summary?.totalValue, summary?.total, summary?.accountValue);
-  const currency = summary?.currency || summary?.currencyCode || summary?.account?.currency || 'GBP';
+  const currency = normalizeCurrencyCode(summary?.currency || summary?.currencyCode || summary?.account?.currency || 'GBP');
   if (cash === null || total === null) throw syncError('INVALID_RESPONSE', 'Trading212 账户摘要字段不完整');
   return { cash, total, currency };
 }
 
 function normalizeCurrencyCode(code) {
   return String(code || 'GBP').trim().toUpperCase();
+}
+
+function quoteCurrency(code) {
+  // Instrument prices can be quoted in sterling pence. Store them in pounds,
+  // while walletImpact amounts retain their separately declared currency.
+  const raw = String(code || 'GBP').trim();
+  const currency = normalizeCurrencyCode(raw);
+  return currency === 'GBX' || raw === 'GBp'
+    ? { code: 'GBP', divisor: 100 }
+    : { code: currency, divisor: 1 };
 }
 
 function requireValuationRates(codes) {
@@ -138,6 +148,7 @@ function requireValuationRates(codes) {
   if (missing.length) {
     throw syncError('FX_RATE_UNAVAILABLE', `Trading212 币种 ${missing.join('、')} 缺少有效兑人民币汇率，已保留原有资产数据`, 422);
   }
+  return rates;
 }
 
 function ensureCurrency(code) {
@@ -169,7 +180,8 @@ function typeForInstrument(instrument = {}) {
   if (rawType.includes('ETF') || rawType.includes('ETC')) return 'etf';
   if (rawType.includes('EQUITY') || rawType.includes('STOCK') || rawType.includes('SHARE')) {
     const ticker = String(instrument.ticker || '');
-    const currency = String(instrument.currencyCode || instrument.currency || '').toUpperCase();
+    const rawCurrency = instrument.currencyCode || instrument.currency;
+    const currency = rawCurrency ? quoteCurrency(rawCurrency).code : '';
     if (ticker.includes('_US_') || currency === 'USD') return 'stock_us';
     if (ticker.includes('_GB_') || currency === 'GBP') return 'stock_uk';
     return 'stock_us';
@@ -207,21 +219,31 @@ async function sync(actor = 'system') {
       }
       const average = pickNumber(position.averagePricePaid, position.averagePrice, 0) || 0;
       const walletValue = pickNumber(position.walletImpact?.currentValue, position.walletImpact?.totalValue, position.currentValue);
-      const currencyCode = instrument.currencyCode || instrument.currency || summary.currency;
+      const currency = quoteCurrency(instrument.currencyCode || instrument.currency || summary.currency);
       return {
         externalId,
         code: externalId,
         name: instrument.name || instrument.shortName || position.name || externalId,
         typeName: typeForInstrument(instrument),
         quantity,
-        average,
-        current,
-        walletValue: walletValue ?? quantity * current,
-        currencyCode
+        average: average / currency.divisor,
+        current: current / currency.divisor,
+        walletValue: walletValue ?? quantity * current / currency.divisor,
+        walletCurrencyCode: walletValue === null
+          ? currency.code
+          : normalizeCurrencyCode(position.walletImpact?.currency || position.walletImpact?.currencyCode || summary.currency),
+        currencyCode: currency.code
       };
     });
 
-    const calculated = summary.cash + normalized.reduce((sum, item) => sum + item.walletValue, 0);
+    const rates = requireValuationRates([
+      summary.currency,
+      ...normalized.flatMap((item) => [item.currencyCode, item.walletCurrencyCode])
+    ]);
+    // Reconciliation is in the account currency. A quote-based fallback must
+    // first be converted; a wallet value already in account currency must not.
+    const calculated = summary.cash + normalized.reduce((sum, item) =>
+      sum + item.walletValue * rates[item.walletCurrencyCode] / rates[summary.currency], 0);
     const difference = calculated - summary.total;
     const tolerance = Math.max(5, Math.abs(summary.total) * 0.02);
     if (Math.abs(difference) > tolerance) {
@@ -230,7 +252,6 @@ async function sync(actor = 'system') {
       error.details = details;
       throw error;
     }
-    requireValuationRates([summary.currency, ...normalized.map((item) => item.currencyCode)]);
 
     const findType = db.prepare('SELECT id FROM asset_types WHERE name = ?');
     const upsertAsset = db.prepare(`

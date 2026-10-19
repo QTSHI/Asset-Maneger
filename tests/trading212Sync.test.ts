@@ -15,6 +15,7 @@ process.env.NODE_ENV = 'test';
 const https = require('node:https');
 let db: any;
 let trading212: any;
+let originalFxRows: any[];
 
 type StubResponse = { status: number; body?: unknown };
 
@@ -59,6 +60,22 @@ const validPositions = [{
   currentPrice: 50,
   walletImpact: { currentValue: 100 }
 }];
+const gbxPosition = {
+  instrument: { ticker: 'TEST_GB_EQ', name: 'UK share in pence', type: 'EQUITY', currencyCode: 'GBX' },
+  quantity: 2,
+  averagePricePaid: 4000,
+  currentPrice: 5000,
+  walletImpact: { currentValue: 100, currency: 'GBP' }
+};
+
+function assetDataSnapshot() {
+  return {
+    assets: db.prepare('SELECT * FROM assets ORDER BY id').all(),
+    quotes: db.prepare('SELECT * FROM quote_cache ORDER BY cache_key').all(),
+    currencies: db.prepare('SELECT * FROM currencies ORDER BY id').all(),
+    platforms: db.prepare('SELECT * FROM platforms ORDER BY id').all()
+  };
+}
 
 beforeAll(() => {
   db = require('../src/services/database.cjs');
@@ -66,6 +83,15 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  originalFxRows = db.prepare("SELECT * FROM exchange_rate_cache WHERE currency_code IN ('GBP', 'USD')").all();
+  db.prepare(`
+    INSERT INTO exchange_rate_cache (currency_code, rate_to_cny) VALUES (?, ?)
+    ON CONFLICT(currency_code) DO UPDATE SET rate_to_cny = excluded.rate_to_cny
+  `).run('GBP', 10);
+  db.prepare(`
+    INSERT INTO exchange_rate_cache (currency_code, rate_to_cny) VALUES (?, ?)
+    ON CONFLICT(currency_code) DO UPDATE SET rate_to_cny = excluded.rate_to_cny
+  `).run('USD', 8);
   db.prepare("DELETE FROM integration_status WHERE integration_key = 'trading212'").run();
   db.prepare("DELETE FROM assets WHERE code = 'T212-TOTAL' OR external_source = 'trading212'").run();
   db.prepare("DELETE FROM quote_cache WHERE source = 'trading212'").run();
@@ -74,7 +100,15 @@ beforeEach(() => {
   db.prepare("DELETE FROM currencies WHERE code = 'CHF'").run();
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  db.prepare("DELETE FROM exchange_rate_cache WHERE currency_code IN ('GBP', 'USD')").run();
+  const restoreFx = db.prepare(`
+    INSERT INTO exchange_rate_cache (currency_code, rate_to_cny, status, error_message, fetched_at)
+    VALUES (@currency_code, @rate_to_cny, @status, @error_message, @fetched_at)
+  `);
+  for (const row of originalFxRows) restoreFx.run(row);
+});
 
 afterAll(() => {
   db?.close();
@@ -82,6 +116,115 @@ afterAll(() => {
 });
 
 describe('Trading212 sync safety', () => {
+  it('normalizes GBX prices to GBP without rescaling GBP wallet totals or counting the archived aggregate', async () => {
+    seedAggregate();
+    stubRequests({
+      '/api/v0/equity/account/summary': { status: 200, body: validSummary },
+      '/api/v0/equity/positions': { status: 200, body: [gbxPosition] }
+    });
+
+    const status = await trading212.sync('test');
+    expect(status).toMatchObject({
+      state: 'success', aggregateFallback: false,
+      details: { total: 120, cash: 20, calculated: 120, difference: 0 }
+    });
+    expect(db.prepare(`
+      SELECT a.shares, a.cost_price, c.code AS currency, at.name AS type
+      FROM assets a JOIN currencies c ON c.id = a.currency_id
+      JOIN asset_types at ON at.id = a.asset_type_id WHERE a.code = 'TEST_GB_EQ'
+    `).get()).toEqual({ shares: 2, cost_price: 40, currency: 'GBP', type: 'stock_uk' });
+    expect(db.prepare("SELECT price, currency_code FROM quote_cache WHERE code = 'TEST_GB_EQ'").get())
+      .toEqual({ price: 50, currency_code: 'GBP' });
+    expect(db.prepare("SELECT code FROM currencies WHERE code = 'GBX'").get()).toBeUndefined();
+    expect(db.prepare("SELECT archived_at FROM assets WHERE code = 'T212-TOTAL'").get().archived_at).not.toBeNull();
+
+    await trading212.sync('test');
+    expect(db.prepare("SELECT COUNT(*) AS count FROM assets WHERE external_source = 'trading212' AND archived_at IS NULL").get().count).toBe(2);
+    expect(db.prepare(`
+      SELECT SUM(a.shares * q.price) AS total FROM assets a
+      JOIN quote_cache q ON q.code = a.code AND q.source = 'trading212'
+      WHERE a.archived_at IS NULL
+    `).get().total).toBe(120);
+  });
+
+  it('reconciles GBX holdings without walletImpact using their value in pounds', async () => {
+    seedAggregate();
+    const { walletImpact: _walletImpact, ...position } = gbxPosition;
+    stubRequests({
+      '/api/v0/equity/account/summary': { status: 200, body: validSummary },
+      '/api/v0/equity/positions': { status: 200, body: [position] }
+    });
+
+    expect(await trading212.sync('test')).toMatchObject({
+      state: 'success', details: { calculated: 120, difference: 0 }
+    });
+    expect(db.prepare("SELECT price, currency_code FROM quote_cache WHERE code = 'TEST_GB_EQ'").get())
+      .toEqual({ price: 50, currency_code: 'GBP' });
+  });
+
+  it('converts USD quote values to a GBP account when walletImpact is absent', async () => {
+    seedAggregate();
+    const position = {
+      instrument: { ticker: 'USD_US_EQ', name: 'US share', type: 'EQUITY', currencyCode: 'USD' },
+      quantity: 2, averagePricePaid: 50, currentPrice: 62.5
+    };
+    stubRequests({
+      '/api/v0/equity/account/summary': { status: 200, body: validSummary },
+      '/api/v0/equity/positions': { status: 200, body: [position] }
+    });
+
+    expect(await trading212.sync('test')).toMatchObject({
+      state: 'success', details: { calculated: 120, difference: 0 }
+    });
+    expect(db.prepare(`
+      SELECT a.shares, a.cost_price, c.code AS currency FROM assets a
+      JOIN currencies c ON c.id = a.currency_id WHERE a.code = 'USD_US_EQ'
+    `).get()).toEqual({ shares: 2, cost_price: 50, currency: 'USD' });
+    expect(db.prepare("SELECT price, currency_code FROM quote_cache WHERE code = 'USD_US_EQ'").get())
+      .toEqual({ price: 62.5, currency_code: 'USD' });
+  });
+
+  it('converts walletImpact in its own currency without applying the GBX price scale', async () => {
+    seedAggregate();
+    stubRequests({
+      '/api/v0/equity/account/summary': { status: 200, body: validSummary },
+      '/api/v0/equity/positions': {
+        status: 200,
+        body: [{ ...gbxPosition, walletImpact: { currentValue: 125, currency: 'USD' } }]
+      }
+    });
+
+    expect(await trading212.sync('test')).toMatchObject({
+      state: 'success', details: { calculated: 120, difference: 0 }
+    });
+    expect(db.prepare("SELECT price, currency_code FROM quote_cache WHERE code = 'TEST_GB_EQ'").get())
+      .toEqual({ price: 50, currency_code: 'GBP' });
+  });
+
+  it.each(['quote', 'wallet'])('preserves all existing asset data when the %s currency has no rate', async (source) => {
+    seedAggregate();
+    stubRequests({
+      '/api/v0/equity/account/summary': { status: 200, body: validSummary },
+      '/api/v0/equity/positions': { status: 200, body: validPositions }
+    });
+    await trading212.sync('test');
+    const before = assetDataSnapshot();
+    vi.restoreAllMocks();
+    const position = source === 'quote'
+      ? { ...validPositions[0], instrument: { ...validPositions[0].instrument, currencyCode: 'ZZZ' } }
+      : { ...validPositions[0], walletImpact: { currentValue: 100, currency: 'ZZZ' } };
+    stubRequests({
+      '/api/v0/equity/account/summary': { status: 200, body: validSummary },
+      '/api/v0/equity/positions': { status: 200, body: [position] }
+    });
+
+    await expect(trading212.sync('test')).rejects.toMatchObject({
+      code: 'FX_RATE_UNAVAILABLE', status: 422, message: expect.stringContaining('ZZZ')
+    });
+    expect(assetDataSnapshot()).toEqual(before);
+    expect(trading212.getStatus()).toMatchObject({ state: 'error', lastErrorCode: 'FX_RATE_UNAVAILABLE' });
+  });
+
   it('treats 401 as invalid credentials without a fallback request or asset changes', async () => {
     seedAggregate();
     const paths = stubRequests({

@@ -37,6 +37,7 @@ const { PORT, EXCHANGE_RATE_INTERVAL } = require('./config/constants.cjs');
 
 const SSO_BASE_URL = 'https://stoneking.top';
 const SERVICE_NAME = 'asset-tracker';
+const SSO_LOGIN_URL = `${SSO_BASE_URL}/api/auth/oidc/login?redirect=${encodeURIComponent(process.env.ASSET_TRACKER_PUBLIC_ORIGIN || 'https://asset.stoneking.top')}`;
 
 const API_PATHS = ['/asset-types', '/currencies', '/platforms', '/assets', '/snapshot', '/refresh-rates', '/exchange-rates', '/login-token', '/summary-by-currency', '/login'];
 
@@ -123,18 +124,18 @@ async function ssoAuthMiddleware(req, res, next) {
     
     if (!token) {
         if (isApiRequest(req)) {
-            return res.status(401).json({ error: '未登录', redirect: `${SSO_BASE_URL}/login?redirect=https://asset.stoneking.top` });
+            return res.status(401).json({ error: '未登录', redirect: SSO_LOGIN_URL });
         }
-        return res.redirect(`${SSO_BASE_URL}/login?redirect=https://asset.stoneking.top`);
+        return res.redirect(SSO_LOGIN_URL);
     }
     
     const user = await verifyToken(token);
     
     if (!user) {
         if (isApiRequest(req)) {
-            return res.status(401).json({ error: '无效的token', redirect: `${SSO_BASE_URL}/login?redirect=https://asset.stoneking.top` });
+            return res.status(401).json({ error: '无效的token', redirect: SSO_LOGIN_URL });
         }
-        return res.redirect(`${SSO_BASE_URL}/login?redirect=https://asset.stoneking.top`);
+        return res.redirect(SSO_LOGIN_URL);
     }
     
     if (!checkServicePermission(user, SERVICE_NAME)) {
@@ -389,7 +390,7 @@ app.get('/exchange-rates', (req, res) => {
     res.json(getExchangeRates());
 });
 
-const LISTEN_HOST = IS_DEVELOPMENT ? '127.0.0.1' : '0.0.0.0';
+const LISTEN_HOST = IS_DEVELOPMENT ? '127.0.0.1' : (process.env.HOST || '127.0.0.1');
 
 app.listen(PORT, LISTEN_HOST, () => {
     console.log(`✅ Asset Tracker已启动: http://${LISTEN_HOST}:${PORT}`);
