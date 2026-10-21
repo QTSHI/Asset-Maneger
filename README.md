@@ -2,9 +2,13 @@
 
 Stone Wealth 是面向家庭场景的资产与财务中心，提供资产、家庭收支记录、统一账户和数据状态。
 
+本仓库为 `QTSHI/Asset-Maneger`，产品名称为 **Stone Wealth**。前端使用 React + TypeScript，后端使用 Express + SQLite，并提供需要本人确认的 MCP Agent 资产修改流程。
+
 当前版本供同一家庭使用：已获授权的家庭成员共用一套资产数据；尚未提供面向陌生用户的家庭隔离或公开注册。最小使用范围及后续公开发布门槛见 [产品路线图](docs/product-roadmap.md)。
 
-生产地址：<https://asset.stoneking.top>
+站点入口：<https://asset.stoneking.top>（需要既有统一登录与服务权限）。查看代码和本地预览无需正式站点账号。
+
+[本地预览](#本地预览) · [常用检查](#常用检查) · [配置](#配置) · [部署](#部署) · [Agent 接入](docs/agent-access.md) · [备份与恢复](docs/personal-backup.md) · [参与维护](CONTRIBUTING.md)
 
 ## 主要能力
 
@@ -26,40 +30,74 @@ Stone Wealth 是面向家庭场景的资产与财务中心，提供资产、家�
 
 需要 Node.js 20.19+（20.x）、22.12+（22.x）或 24.x。
 
+首次下载项目：
+
 ```bash
-npm install
+git clone https://github.com/QTSHI/Asset-Maneger.git
+cd Asset-Maneger
+npm ci
+```
+
+macOS / Linux / WSL 启动前后端：
+
+```bash
 npm run dev
 ```
 
-打开 <http://127.0.0.1:5173>。本地预览使用 `database.dev.sqlite` 和模拟家庭成员身份，不会改动正式数据库，也不会进入生产 SSO 逻辑。
+Windows PowerShell 请在项目目录分别打开两个终端。第一个启动后端：
 
-如果 `better-sqlite3` 报 Mach-O 或架构错误，先在项目目录执行：
+```powershell
+$env:NODE_ENV = 'development'
+$env:ASSET_TRACKER_DB_PATH = 'database.dev.sqlite'
+node src/server.cjs
+```
+
+第二个启动前端：
 
 ```bash
-rm -rf node_modules
-npm install
+npm run dev:client
 ```
+
+打开 <http://127.0.0.1:5173>；后端默认监听 <http://127.0.0.1:8080>。本地预览使用 `database.dev.sqlite` 和模拟家庭成员身份，不会改动正式数据库，也不会进入生产 SSO 逻辑。空数据库会初始化表结构，先创建账户，再录入资产；本地预览不需要 Trading212 凭据。
+
+`npm run dev:server` 使用 POSIX 环境变量语法，因此 Windows PowerShell 使用上述方式。预览模式绕过登录，只用于本机开发。
+
+如果 `better-sqlite3` 报 Mach-O、架构或原生模块加载错误，请确认 Node.js 版本符合要求，并在当前操作系统和架构上重新执行 `npm ci`；不要复用其他系统的 `node_modules`。
 
 ## 常用检查
 
+| 命令 | 检查内容 |
+| --- | --- |
+| `npm run typecheck` | TypeScript 类型检查 |
+| `npm test` | Vitest 单元与交互测试 |
+| `npm run build` | 生成前端部署产物到 `src/public/` |
+| `npm run check` | 依次执行类型检查、单元测试与构建 |
+| `npm run test:e2e` | Playwright 浏览器流程 |
+
+首次运行浏览器测试前安装 Chromium：
+
 ```bash
-npm run typecheck
-npm test
+npx playwright install chromium
 npm run test:e2e
-npm run build
-npm audit
 ```
 
-端到端测试覆盖 375px、768px、常规桌面和 1440px 页面，使用独立的临时数据库及模拟数据，不复用正在运行的本地网站。测试服务使用 5273 和 8187 端口，退出后自动清理。GitHub 检查配置会在 PR 和 `main` 更新时运行类型检查、测试、构建及浏览器流程。
+端到端测试配置覆盖 375px、768px、常规桌面和 1440px 页面，使用独立的临时数据库及模拟数据，不复用正在运行的本地网站。测试服务使用 5273 和 8187 端口，退出后自动清理。[GitHub 检查配置](.github/workflows/checks.yml)在 PR 和 `main` 更新时运行类型检查、测试、构建及浏览器流程；实际结果以对应提交的运行记录为准。
+
+依赖审计可单独运行 `npm audit`。`src/public/` 当前随仓库保存，构建后请检查其差异；日常修改以 `client/` 为源文件，勿手工编辑压缩后的部署文件。
 
 ## 配置
 
-复制 `.env.example` 后通过环境变量注入密钥，不要把真实值提交到 Git：
+变量示例见 [`.env.example`](.env.example)。当前启动入口不会自动读取 `.env`，请通过终端或进程管理器注入；也可在直接启动 Node.js 时显式指定 `--env-file`。不要把真实密钥提交到 Git。
 
-```bash
-T212_API_KEY=...
-T212_API_SECRET=...
-```
+| 变量 | 用途与默认行为 |
+| --- | --- |
+| `PORT` | 后端端口，默认 `8080`；前端开发代理也使用 `8080` |
+| `ASSET_TRACKER_DB_PATH` | 数据库路径；正式环境默认 `database.sqlite`，开发启动必须使用独立路径 |
+| `T212_API_KEY` / `T212_API_SECRET` | 可选的 Trading212 同步凭据 |
+| `ASSET_TRACKER_PUBLIC_ORIGIN` | 正式网站来源，用于写入来源检查及登录回跳 |
+| `ASSET_TRACKER_MCP_ALLOWED_HOSTS` | MCP 允许的 Host，逗号分隔 |
+
+备份路径、保留份数与有效期限见 [备份配置](docs/personal-backup.md)。
 
 生产认证继续使用既有 SSO：Token 验证、五分钟缓存、服务权限、登录跳转、401 行为及用户注入均保留。业务接口统一挂载在认证之后的 `/api/v2`。
 
@@ -92,10 +130,13 @@ CSV 导出只包含未归档记录，持仓同时排除已归档账户；收支�
 client/                    React + TypeScript 前端
 src/server.cjs             Express 启动与原 SSO 边界
 src/routes/v2.cjs          Stone Wealth API
+src/mcp.cjs                MCP Agent 接入边界
 src/services/              估值、行情、Trading212 与数据库服务
 src/db/migrations.cjs      增量数据库迁移
 src/public/                npm run build 生成的部署产物
 tests/                     单元与端到端测试
+docs/                      Agent 接入、备份与产品路线图
+deploy/systemd/            Linux 每日备份任务示例
 ```
 
 ## 部署
